@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptateur PAP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.cdnfonts.com/css/opendyslexic" rel="stylesheet">
+<style>
+:root{--bleu:#1F4E79;--bleu2:#2F6FB0;--clair:#EEF3F8;--bord:#D5DDE6;--texte:#1B2430;--doux:#5B6878;--ok:#2E7D4F;--alerte:#B26A00;--erreur:#B3261E;--r:10px}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,Arial,sans-serif;color:var(--texte);background:#F6F8FB}
+header{background:var(--bleu);color:#fff;padding:.7rem 1.2rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+header h1{font-size:1.15rem;margin:0;font-weight:600}
+header .sp{flex:1}
+header select,header button{font:inherit}
+nav{display:flex;gap:.3rem;flex-wrap:wrap}
+nav button{background:transparent;color:#fff;border:1px solid transparent;border-radius:8px;padding:.35rem .8rem;cursor:pointer;font:inherit}
+nav button.actif{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.35)}
+main{max-width:1180px;margin:0 auto;padding:1.2rem}
+h2{font-size:1.35rem;margin:.2rem 0 1rem}
+h3{font-size:1.05rem;margin:1.2rem 0 .6rem}
+.carte{background:#fff;border:1px solid var(--bord);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:1rem}
+.grille{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+label{display:block;font-weight:500;margin:.6rem 0 .25rem}
+input,select,textarea{font:inherit;width:100%;padding:.5rem .6rem;border:1px solid var(--bord);border-radius:8px;background:#fff}
+textarea{min-height:4.5rem;resize:vertical}
+input[type=checkbox],input[type=radio]{width:auto}
+button{font:inherit;cursor:pointer}
+.btn{background:var(--bleu2);color:#fff;border:none;border-radius:8px;padding:.55rem 1rem;font-weight:500}
+.btn:hover{filter:brightness(1.07)}.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.sec{background:#fff;color:var(--bleu2);border:1px solid var(--bleu2)}
+.btn.discret{background:transparent;color:var(--bleu2);padding:.3rem .5rem}
+.btn.danger{background:#fff;color:var(--erreur);border:1px solid var(--erreur)}
+.ligne{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.ligne>*{flex:0 0 auto}
+.doux{color:var(--doux);font-size:.92rem}
+.pastille{display:inline-block;font-size:.78rem;padding:.1rem .5rem;border-radius:999px;background:var(--clair);color:var(--bleu);border:1px solid var(--bord)}
+.pastille.forme{background:#EAF5EA;color:#245B37}.pastille.consignes{background:#FFF4E0;color:#7A4A00}.pastille.fond{background:#FCEBEA;color:#8A1F17}.pastille.hors_document{background:#EFEFEF;color:#444}
+.msg{padding:.7rem 1rem;border-radius:8px;margin:.6rem 0}
+.msg.ok{background:#E8F3EC;color:#1E5B37}.msg.err{background:#FCEBEA;color:#8A1F17}.msg.info{background:var(--clair);color:var(--bleu)}
+.etapes{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:1rem}
+.etapes span{padding:.35rem .7rem;border-radius:999px;background:#E4E9F0;color:var(--doux);font-size:.88rem}
+.etapes span.fait{background:#D8EEDF;color:var(--ok)}.etapes span.cour{background:var(--bleu2);color:#fff}
+details.famille{border:1px solid var(--bord);border-radius:8px;margin:.4rem 0;background:#fff}
+details.famille summary{padding:.55rem .8rem;cursor:pointer;font-weight:600}
+details.famille .items{padding:.2rem .8rem .7rem}
+.item-adapt{display:flex;gap:.6rem;align-items:flex-start;padding:.35rem 0;border-top:1px solid #F0F2F5}
+.item-adapt .regle{font-size:.84rem;color:var(--doux)}
+.chips button{border:1px solid var(--bord);background:#fff;border-radius:999px;padding:.3rem .8rem;margin:.15rem;cursor:pointer}
+.chips button:hover{border-color:var(--bleu2)}
+.fonds button{width:2.2rem;height:2.2rem;border-radius:50%;border:2px solid #ccc;margin-right:.3rem;cursor:pointer}
+.fonds button.sel{border-color:var(--bleu2);box-shadow:0 0 0 2px var(--bleu2)}
+.apercu{border:1px solid var(--bord);border-radius:8px;overflow:hidden}
+.apercu .rendu{padding:1rem!important}
+.onglets{display:flex;gap:.3rem;border-bottom:2px solid var(--bord);margin-bottom:1rem;flex-wrap:wrap}
+.onglets button{border:none;background:none;padding:.5rem .9rem;border-bottom:3px solid transparent;margin-bottom:-2px;color:var(--doux)}
+.onglets button.actif{border-color:var(--bleu2);color:var(--bleu);font-weight:600}
+.prop{border:1px solid var(--bord);border-radius:8px;padding:.8rem;background:#fff}
+.prop.choisie{border:2px solid var(--ok)}
+.controle{font-size:.88rem}.controle .ok{color:var(--ok)}.controle .ko{color:var(--alerte)}
+.deux{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:1rem}
+@media (max-width:900px){.deux{grid-template-columns:1fr}}
+.feuille{border:1px solid var(--bord);border-radius:8px;max-height:75vh;overflow:auto;background:#fff}
+.edition [data-edit]{outline:1px dashed #9BB7D4;border-radius:3px}
+.chargement{display:inline-block;width:1em;height:1em;border:2px solid var(--bleu2);border-right-color:transparent;border-radius:50%;animation:t .8s linear infinite;vertical-align:-2px}
+@keyframes t{to{transform:rotate(360deg)}}
+table.liste{width:100%;border-collapse:collapse}table.liste td,table.liste th{padding:.45rem .5rem;border-bottom:1px solid #EEF1F4;text-align:left}
+.q-edit{border:1px solid #EEF1F4;border-radius:8px;padding:.6rem;margin:.5rem 0;background:#FAFBFD}
+.q-edit .ligne input{width:auto}
+.vide{text-align:center;padding:2rem;color:var(--doux)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Adaptateur PAP</h1>
+  <nav id="nav"></nav>
+  <span class="sp"></span>
+  <span id="etab"></span>
+  <span id="compte" class="doux" style="color:#DCE6F0"></span>
+</header>
+<main id="app"><p class="vide"><span class="chargement"></span> Chargement…</p></main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
