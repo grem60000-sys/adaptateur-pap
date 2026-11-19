@@ -5,7 +5,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   FONDS, POLICES, parametres, rendreHtml, cssRendu, pageHtmlAutonome, structureVersContenu,
-  normaliser, docxDepuisContenu, tiersTemps, echapper, texteBloc,
+  normaliser, docxDepuisContenu, tiersTemps, echapper, texteBloc, rendreCorrigeHtml, svgFigure, figuresDe, pourImpression,
 } from "./rendu.js";
 
 const SUPA_URL = "https://mfykdfytbnajxfnkjhwz.supabase.co";
@@ -449,6 +449,7 @@ function etapeVerification(d) {
     h("div", { class: "ligne" }, h("b", {}, ex.id), champ(ex, "titre", { style: "flex:1;min-width:240px" })),
     h("label", {}, "Consigne générale"), champ(ex, "consigne_generale", { zone: true }),
     (ex.documents ?? []).map((doc) => h("div", {}, h("label", {}, `Document ${doc.id}${doc.titre ? " — " + doc.titre : ""}`), champ(doc, "contenu", { zone: true }))),
+    (ex.figures ?? []).map((f) => editeurFigure(f)),
     (ex.questions ?? []).map((q) => h("div", { class: "q-edit" },
       h("div", { class: "ligne" }, h("b", {}, q.id), h("span", {}, "N°"), champ(q, "numero", { style: "width:4rem" }),
         h("span", {}, "Points"), champ(q, "points", { type: "number", style: "width:5rem" }),
@@ -461,7 +462,7 @@ function etapeVerification(d) {
   afficher(bandeau(1),
     h("h2", {}, `Vérifier la lecture — ${d.titre}`),
     message("info", "Relisez ce que l’outil a compris : énoncés, points et compétence de chaque question. Corrigez si besoin. Les adaptations s’appuieront sur cette version."),
-    s.lisibilite && s.lisibilite !== "bonne" ? message("err", `Lisibilité du document : ${s.lisibilite}. Vérifiez attentivement le texte.`) : null,
+    (s.alertes_lecture ?? []).length ? h("div", { class: "msg err" }, h("b", {}, "Passages difficiles à lire — vérifiez-les : "), h("ul", {}, s.alertes_lecture.map((a) => h("li", {}, a)))) : null,
     h("div", { class: "carte" }, h("div", { class: "grille" },
       h("div", {}, h("label", {}, "Titre"), champ(s, "titre")),
       h("div", {}, h("label", {}, "Durée (minutes)"), champ(s, "duree_minutes", { type: "number" })),
@@ -474,6 +475,26 @@ function etapeVerification(d) {
       etapeEleves(await chargerDoc(d.id));
     }, zone) }, "Valider la lecture"),
     h("button", { class: "btn sec", onclick: () => etapeLecture(d) }, "Relire le document")), zone);
+}
+
+function editeurFigure(f) {
+  const apercu = h("div", { class: "apercu", style: "padding:.5rem;background:#fff" });
+  const dessiner = () => {
+    if (f.type === "droite_graduee" || f.type === "repere") apercu.innerHTML = svgFigure(f);
+    else apercu.textContent = f.description ?? "(figure décrite en texte)";
+  };
+  const zone = h("textarea", { style: "font-family:monospace;font-size:.85rem;min-height:6rem", value: JSON.stringify(f, null, 1) });
+  const err = h("div");
+  zone.addEventListener("input", () => {
+    try { const n = JSON.parse(zone.value); Object.keys(f).forEach((k) => delete f[k]); Object.assign(f, n); err.replaceChildren(); dessiner(); }
+    catch { err.replaceChildren(message("err", "Format invalide : vérifiez les virgules et les guillemets.")); }
+  });
+  dessiner();
+  return h("div", { class: "q-edit" },
+    h("b", {}, `Figure ${f.id ?? ""}${f.titre ? " — " + f.titre : ""}`),
+    h("p", { class: "doux" }, "Vérifiez que la figure redessinée correspond à l’original (valeurs, points)."),
+    apercu,
+    h("details", {}, h("summary", {}, "Corriger les valeurs de la figure"), zone, err));
 }
 
 function verificationCours(d, s) {
@@ -676,7 +697,8 @@ async function etapeExport(d) {
   const boutons = (contenu, p, identifiant, base) => h("span", { class: "ligne" },
     h("button", { class: "btn sec", onclick: () => exporterWord(contenu, p, identifiant, base) }, "Word"),
     h("button", { class: "btn sec", onclick: () => imprimer(contenu, p, identifiant) }, "PDF"),
-    h("button", { class: "btn sec", onclick: () => telecharger(`${base}.html`, pageHtmlAutonome(contenu, p, { identifiant }), "text/html") }, "HTML"));
+    h("button", { class: "btn sec", onclick: () => telecharger(`${base}.html`, pageHtmlAutonome(contenu, p, { identifiant }), "text/html") }, "HTML"),
+    normaliser(contenu).corrige?.length ? h("button", { class: "btn discret", onclick: () => imprimer(contenu, parametres([], {}, null), identifiant, true) }, "Corrigé") : null);
 
   afficher(bandeau(5), h("h2", {}, `Exporter — ${d.titre}`),
     message("info", "PDF : choisissez « Enregistrer au format PDF » dans la fenêtre d’impression. HTML : version interactive (lecture vocale, règle de lecture, pas à pas selon le profil)."),
@@ -696,21 +718,37 @@ async function etapeExport(d) {
       h("button", { class: "btn sec", onclick: () => essai(async () => { verifier(await sb.from("documents").update({ statut: "termine" }).eq("id", d.id)); vueDocuments(); }) }, "Marquer comme terminé")));
 }
 
+async function svgVersPng(svg) {
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  await new Promise((ok, ko) => { img.onload = ok; img.onerror = ko; img.src = url; });
+  const echelle = 2;
+  const cv = h("canvas", { width: img.width * echelle, height: img.height * echelle });
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(img, 0, 0, cv.width, cv.height);
+  URL.revokeObjectURL(url);
+  const blob = await new Promise((ok) => cv.toBlob(ok, "image/png"));
+  return { data: new Uint8Array(await blob.arrayBuffer()), largeur: img.width, hauteur: img.height };
+}
+
 async function exporterWord(contenu, p, identifiant, base) {
   await essai(async () => {
     const docx = await import("https://esm.sh/docx@9.5.1");
-    const doc = docxDepuisContenu(docx, contenu, p, { identifiant });
+    const images = new Map();
+    for (const f of figuresDe(contenu)) images.set(f, await svgVersPng(svgFigure(f)));
+    const doc = docxDepuisContenu(docx, contenu, p, { identifiant, images });
     telecharger(`${base}.docx`, await docx.Packer.toBlob(doc));
   });
 }
 
-function imprimer(contenu, p, identifiant) {
+function imprimer(contenu, p, identifiant, corrige = false) {
   const w = window.open("", "_blank");
   if (!w) return alert("Autorisez les fenêtres pour cette page afin d’imprimer.");
   w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${echapper(normaliser(contenu).titre)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;600&display=swap" rel="stylesheet">
 <link href="https://fonts.cdnfonts.com/css/opendyslexic" rel="stylesheet">
-<style>body{margin:0}${cssRendu(p)}</style></head><body>${rendreHtml(contenu, p, { identifiant })}
+<style>body{margin:0}${cssRendu(p)}</style></head><body>${pourImpression(corrige ? rendreCorrigeHtml(contenu, p, { identifiant }) : rendreHtml(contenu, p, { identifiant }), p)}
 <script>document.fonts.ready.then(()=>setTimeout(()=>print(),300))<\/script></body></html>`);
   w.document.close();
 }
