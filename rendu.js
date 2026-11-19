@@ -155,7 +155,8 @@ export function svgRepere(b) {
   const xmin = Math.floor(Number(b.xmin ?? -5)), xmax = Math.ceil(Number(b.xmax ?? 5));
   const ymin = Math.floor(Number(b.ymin ?? -5)), ymax = Math.ceil(Number(b.ymax ?? 5));
   const pas = Number(b.pas) > 0 ? Number(b.pas) : 1;
-  const c = 26, m = 22;
+  const unites = Math.max((xmax - xmin) / pas, (ymax - ymin) / pas);
+  const c = Math.max(26, Math.min(34, Math.round(260 / unites))), m = 22;
   const W = (xmax - xmin) / pas * c + 2 * m, H = (ymax - ymin) / pas * c + 2 * m;
   const X = (v) => m + (v - xmin) / pas * c, Y = (v) => m + (ymax - v) / pas * c;
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="Arial" font-size="11">`;
@@ -278,7 +279,10 @@ export function cssRendu(p) {
 .rendu{font-family:${p.police};font-size:${p.taille}pt;line-height:${p.interligne};background:${p.fond};color:${p.couleurTexte};padding:${pad};text-align:left;hyphens:none;${p.aere ? "letter-spacing:.02em;word-spacing:.06em;" : ""}}
 .rendu .titre-sujet{color:${BLEU};text-align:center;font-size:${p.taille + 5}pt;font-weight:bold;margin:0 0 .3em}
 .rendu .identite{display:flex;justify-content:space-between;margin-bottom:.8em}
-.rendu .exo{border:1.5px solid ${BLEU};border-radius:3px;padding:.5em .8em .6em;margin:0 0 .9em;break-inside:avoid;page-break-inside:avoid}
+.rendu .exo{border:1.5px solid ${BLEU};border-radius:3px;padding:.5em .8em .6em;margin:0 0 .9em;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.rendu .exo-tete{break-after:avoid}
+.rendu .exo .bloc:has(+ .figure){break-after:avoid}
+.rendu .exo table,.rendu .exo .figure,.rendu .exo .encadre,.rendu .exo .grille,.rendu .exo .deux-col,.rendu .exo .bloc{break-inside:avoid}
 .rendu .exo.libre{border:none;padding:0}
 .rendu .exo-tete{display:flex;justify-content:space-between;align-items:baseline;color:${BLEU};font-weight:bold;margin-bottom:.3em}
 .rendu .progression{font-size:.8em;color:#666;margin-bottom:.2em}
@@ -514,6 +518,217 @@ export function docxDepuisContenu(docx, contenu, p, options = {}) {
   return new Document({
     creator: "Adaptateur PAP",
     title: c.titre,
+    ...(fond !== "FFFFFF" ? { background: { color: fond } } : {}),
+    styles: { default: { document: { run: { font: police, size: taille } } } },
+    sections: [{ properties: { page: { margin: { top: 900, bottom: 900, left: 1000, right: 1000 } } }, children: enfants }],
+  });
+}
+
+// =====================================================================
+//  v3 — Documents composés en HTML selon la charte
+// =====================================================================
+export function cssCharte(p) {
+  return `
+.sujet{font-family:${p.police};font-size:${p.taille}pt;line-height:${p.interligne};color:${p.couleurTexte};background:${p.fond};padding:0 1.6cm;text-align:left;hyphens:none;${p.aere ? "letter-spacing:.02em;word-spacing:.06em;" : ""}}
+.sujet h1{color:${BLEU};text-align:center;font-size:1.3em;margin:0 0 .2em;line-height:1.25}
+.sujet .entete{display:flex;justify-content:space-between;margin:.3em 0 .8em}
+.sujet .lexique{background:rgba(31,78,140,.08);border-radius:4px;padding:.4em .9em;margin-bottom:.9em}
+.sujet b.t{display:block;margin-bottom:.1em}
+.sujet ul{margin:.1em 0;padding-left:1.1em}
+.sujet .exo{border:1.6px solid ${BLEU};border-radius:3px;padding:.45em .9em .6em;margin:0 0 .9em;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.sujet .exo>header{display:flex;justify-content:space-between;gap:1em;color:${BLEU};font-weight:bold;margin-bottom:.25em;break-after:avoid}
+.sujet p{margin:.35em 0}
+.sujet .encadre{background:rgba(31,78,140,.08);border-radius:4px;padding:.35em .8em;margin:.35em 0}
+.sujet .donnees{display:flex;flex-wrap:wrap;gap:.3em 1.6em;font-weight:bold;margin:.35em 0}
+.sujet .donnees span.i{font-weight:normal}
+.sujet table.rep{border-collapse:collapse;margin:.3em 0}
+.sujet table.rep th,.sujet table.rep td{border:1px solid #333;padding:.15em .7em;text-align:center;min-width:3em}
+.sujet table.rep th{background:rgba(31,78,140,.08)}
+.sujet table.rep td.v{height:${p.grandesZones ? "2.6em" : "1.9em"};min-width:5em}
+.sujet .case{font-size:1.15em}
+.sujet .grille{display:grid;gap:.25em 1.4em;margin:.35em 0}
+.sujet .g2{grid-template-columns:1fr 1fr}.sujet .g3{grid-template-columns:1fr 1fr 1fr}
+.sujet .deux-col{display:grid;grid-template-columns:auto 1fr;gap:1.2em;align-items:start}
+.sujet .figure svg{display:block;max-width:100%;height:auto}
+.sujet .fig-titre{font-weight:bold;font-size:.85em;margin-top:.3em}
+.sujet .figure-originale{border:2px dashed #C26A12;padding:.5em;color:#7A4A00;font-style:italic}
+.sujet .etape{margin:.3em 0 .3em .2em}
+.sujet .etape b.n{color:${BLEU}}
+.sujet .entoure b{margin:0 .3em}
+.sujet .check{border:1.5px dashed ${BLEU};border-radius:4px;padding:.25em .8em;margin:.4em 0;font-size:.92em}
+.sujet .lignes .l{border-bottom:1px dotted #666;height:${p.grandesZones ? "1.4cm" : "0.95cm"}}
+.sujet table,.sujet .figure,.sujet .encadre,.sujet .grille,.sujet .deux-col,.sujet .check,.sujet p,.sujet .etape{break-inside:avoid}
+.sujet p:has(+ .figure),.sujet .figure{break-after:avoid}
+.sujet[contenteditable=true]{outline:2px dashed #2F6FB0;outline-offset:4px}
+.corrige-doc{font-family:Arial,sans-serif;font-size:10.5pt;line-height:1.3;color:#111;background:#fff;padding:0 1.6cm}
+.corrige-doc h2{color:${BLEU};text-align:center}
+.corrige-doc table{border-collapse:collapse;width:100%}.corrige-doc th,.corrige-doc td{border:1px solid #999;padding:.25em .45em;text-align:left;vertical-align:top}
+.corrige-doc th{background:#EEF2F8}
+table.mise-page{width:100%;border-collapse:collapse}table.mise-page>*>tr>td{padding:0}
+@media print{@page{size:A4;margin:0}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact;background:${p.fond}}}`;
+}
+
+function figureDepuisAttribut(txtJson) {
+  try { return JSON.parse(txtJson); } catch { return null; }
+}
+
+/** Remplace les blocs de données par les figures dessinées (version texte, pour l'impression et l'export). */
+export function hydraterHtml(html) {
+  if (typeof document !== "undefined") {
+    const t = document.createElement("template"); t.innerHTML = String(html ?? "");
+    hydraterDom(t.content);
+    const d = document.createElement("div"); d.append(t.content);
+    d.querySelectorAll("[contenteditable]").forEach((x) => x.removeAttribute("contenteditable"));
+    return d.innerHTML;
+  }
+  return String(html ?? "")
+    .replace(/<div class="figure" data-fig='([^']*)'>\s*<\/div>/g, (m, j) => {
+      const f = figureDepuisAttribut(j.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+      if (!f) return "";
+      return `<div class="figure">${f.titre ? `<div class="fig-titre">${echapper(f.titre)}</div>` : ""}${svgFigure(f)}</div>`;
+    })
+    .replace(/<div class="lignes" data-n="(\d+)">\s*<\/div>/g, (m, n) =>
+      `<div class="lignes">${'<div class="l"></div>'.repeat(Math.max(1, Math.min(12, +n)))}</div>`);
+}
+
+/** Même opération sur un conteneur DOM (aperçu) en gardant les données pour l'enregistrement. */
+export function hydraterDom(racine) {
+  racine.querySelectorAll(".figure[data-fig]").forEach((el) => {
+    const f = figureDepuisAttribut(el.getAttribute("data-fig"));
+    if (!f) return;
+    el.innerHTML = `${f.titre ? `<div class="fig-titre">${echapper(f.titre)}</div>` : ""}${svgFigure(f)}`;
+    el.setAttribute("contenteditable", "false");
+  });
+  racine.querySelectorAll(".lignes[data-n]").forEach((el) => {
+    el.innerHTML = '<div class="l"></div>'.repeat(Math.max(1, Math.min(12, +el.getAttribute("data-n"))));
+    el.setAttribute("contenteditable", "false");
+  });
+}
+
+/** HTML à enregistrer depuis l'aperçu (figures et lignes ramenées à leurs données). */
+export function htmlPourStockage(racine) {
+  const c = racine.cloneNode(true);
+  c.querySelectorAll(".figure[data-fig],.lignes[data-n]").forEach((el) => { el.innerHTML = ""; el.removeAttribute("contenteditable"); });
+  return c.innerHTML;
+}
+
+export function corrigeHtml(contenu, titre, identifiant) {
+  const lignes = (contenu?.corrige ?? []).map((r) => `<tr><td>${echapper(r.exercice ?? r.question ?? "")}</td><td>${echapper(r.reponses ?? r.reponse ?? "")}</td><td>${echapper(r.bareme ?? "")}</td></tr>`).join("");
+  return `<div class="corrige-doc"><h2>Corrigé et barème (pour l’enseignant)</h2><p>${echapper(titre ?? "")}${identifiant ? ` — ${echapper(identifiant)}` : ""}</p>${lignes ? `<table><tr><th>Ex.</th><th>Réponses attendues</th><th>Barème</th></tr>${lignes}</table>` : "<p>Pas de corrigé.</p>"}</div>`;
+}
+
+export function pageAutonomeV3(html, p, titre) {
+  const outils = [];
+  if (p.audio) outils.push(`<button onclick="lireTout()">🔊 Écouter</button><button onclick="speechSynthesis.cancel()">⏹ Stop</button>`);
+  if (p.regle) outils.push(`<button onclick="document.body.classList.toggle('avec-regle')">📏 Règle de lecture</button>`);
+  if (p.pasAPas) outils.push(`<button onclick="pas(-1)">◀ Précédent</button><span id="pos"></span><button onclick="pas(1)">Suivant ▶</button>`);
+  return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${echapper(titre)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;600&display=swap" rel="stylesheet"><link href="https://fonts.cdnfonts.com/css/opendyslexic" rel="stylesheet">
+<style>body{margin:0;background:${p.fond}}.sujet{max-width:21cm;margin:0 auto;padding-top:1.2cm;padding-bottom:1.2cm}.outils{position:sticky;top:0;background:#fff;border-bottom:1px solid #ccc;padding:.5em;display:flex;gap:.5em;flex-wrap:wrap;z-index:5;font-family:Arial}
+.outils button{font-size:16px;padding:.4em .8em;border-radius:6px;border:1px solid #888;background:#f4f4f4;cursor:pointer}
+#regle{display:none;position:fixed;left:0;right:0;height:2.2em;background:rgba(255,235,59,.35);pointer-events:none;z-index:4}.avec-regle #regle{display:block}
+.pas-a-pas .exo{display:none}.pas-a-pas .exo.active{display:block}${cssCharte(p)}</style></head><body${p.pasAPas ? ' class="pas-a-pas"' : ""}>
+${outils.length ? `<div class="outils">${outils.join("")}</div>` : ""}<div id="regle"></div><div class="sujet">${hydraterHtml(html)}</div>
+<script>
+document.addEventListener('mousemove',e=>{const r=document.getElementById('regle');r.style.top=(e.clientY-14)+'px'});
+function lireTout(){speechSynthesis.cancel();const z=document.querySelector('.pas-a-pas .exo.active')||document.querySelector('.sujet');const u=new SpeechSynthesisUtterance(z.innerText);u.lang='fr-FR';u.rate=.95;speechSynthesis.speak(u)}
+let i=0;const S=[...document.querySelectorAll('.sujet .exo')];
+function pas(d){if(!S.length)return;i=Math.max(0,Math.min(S.length-1,i+d));S.forEach((s,k)=>s.classList.toggle('active',k===i));const p=document.getElementById('pos');if(p)p.textContent=(i+1)+' / '+S.length;scrollTo(0,0)}
+${p.pasAPas ? "pas(0);" : ""}</script></body></html>`;
+}
+
+/** Word depuis le document HTML (DOM), figures fournies en PNG. */
+export function docxDepuisDom(docx, racine, p, images = new Map()) {
+  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, ImageRun, TabStopType, AlignmentType } = docx;
+  const police = p.police.split(",")[0].replace(/'/g, "").trim();
+  const taille = Math.round(p.taille * 2), interligne = Math.round(p.interligne * 240), apres = p.aere ? 120 : 70;
+  const fill = "EAF0F7";
+  const runsDe = (noeud, style = {}) => {
+    const out = [];
+    noeud.childNodes.forEach((n) => {
+      if (n.nodeType === 3) { const t = n.textContent.replace(/\s+/g, " "); if (t) out.push(new TextRun({ text: p.nombres ? nombresLisibles(t) : t, font: police, size: taille, ...style })); }
+      else if (n.nodeType === 1) {
+        const tag = n.tagName.toLowerCase();
+        if (tag === "br") out.push(new TextRun({ break: 1 }));
+        else if (n.classList?.contains("figure")) { /* traité à part */ }
+        else out.push(...runsDe(n, (tag === "b" || tag === "strong" || tag === "th") ? { ...style, bold: true } : (tag === "i" || tag === "em") ? { ...style, italics: true } : tag === "sup" ? { ...style, superScript: true } : style));
+      }
+    });
+    return out;
+  };
+  const para = (children, opts = {}) => new Paragraph({ children, spacing: { line: interligne, after: apres }, ...opts });
+  const enfants = [];
+  const tableDe = (tab, bordures = true) => {
+    const rows = [...tab.querySelectorAll("tr")];
+    if (!rows.length) return;
+    const nCol = Math.max(...rows.map((r) => r.children.length));
+    const longueurs = Array.from({ length: nCol }, (_, k) => Math.max(3, ...rows.map((r) => (r.children[k]?.textContent ?? "").trim().length)));
+    const somme = longueurs.reduce((a, b) => a + b, 0);
+    const total = (!bordures || somme > 45) ? 9600 : Math.min(9600, Math.max(3600, nCol * 1500));
+    const largeurs = longueurs.map((l) => Math.max(800, Math.round(total * l / somme)));
+    const ajust = total / largeurs.reduce((a, b) => a + b, 0);
+    largeurs.forEach((l, k) => { largeurs[k] = Math.floor(l * ajust); });
+    const sans = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
+    enfants.push(new Table({
+      width: { size: total, type: WidthType.DXA }, columnWidths: largeurs,
+      rows: rows.map((r) => new TableRow({ children: [...r.children].map((c, k) => new TableCell({
+        children: [para(runsDe(c, c.tagName === "TH" ? { bold: true } : {}), { alignment: bordures ? AlignmentType.CENTER : AlignmentType.LEFT, spacing: { line: interligne, before: 30, after: 30 } })],
+        shading: c.tagName === "TH" && bordures ? { type: ShadingType.CLEAR, fill } : undefined,
+        width: { size: largeurs[k] ?? largeurs[0], type: WidthType.DXA },
+        ...(bordures ? {} : { borders: { top: sans, bottom: sans, left: sans, right: sans } }),
+      })) })),
+    }));
+    enfants.push(para([]));
+  };
+  const figure = (el) => {
+    const img = images.get(el);
+    const f = figureDepuisAttribut(el.getAttribute("data-fig") ?? "");
+    if (f?.titre) enfants.push(para([new TextRun({ text: f.titre, bold: true, font: police, size: Math.max(taille - 4, 18) })]));
+    if (!img) return;
+    const e = Math.min(1, 600 / img.largeur);
+    enfants.push(new Paragraph({ children: [new ImageRun({ type: "png", data: img.data, transformation: { width: Math.round(img.largeur * e), height: Math.round(img.hauteur * e) } })], spacing: { after: apres } }));
+  };
+  const visiter = (el) => {
+    if (el.nodeType === 3) { if (el.textContent.trim()) enfants.push(para(runsDe({ childNodes: [el] }))); return; }
+    if (el.nodeType !== 1) return;
+    const tag = el.tagName.toLowerCase(), cl = el.classList;
+    if (tag === "h1") return enfants.push(para(runsDe(el, { bold: true, size: taille + 8, color: "1F4E8C" }), { alignment: AlignmentType.CENTER }));
+    if (cl.contains("entete")) { const [a, b] = el.children; return enfants.push(para([...runsDe(a ?? el), new TextRun({ text: "\t" }), ...(b ? runsDe(b) : [])], { tabStops: [{ type: TabStopType.RIGHT, position: 9600 }] })); }
+    if (cl.contains("figure")) return figure(el);
+    if (cl.contains("lignes")) { const n = +(el.getAttribute("data-n") || el.children.length || 2); for (let k = 0; k < n; k++) enfants.push(new Paragraph({ children: [new TextRun({ text: " " })], spacing: { line: p.grandesZones ? 700 : 460 }, border: { bottom: { style: BorderStyle.DOTTED, size: 6, color: "666666", space: 1 } } })); return; }
+    if (cl.contains("lexique") || cl.contains("encadre") || cl.contains("check")) {
+      const sh = cl.contains("check") ? {} : { shading: { type: ShadingType.CLEAR, fill } };
+      el.childNodes.forEach((n) => {
+        if (n.nodeType === 1 && n.tagName === "UL") n.querySelectorAll(":scope > li").forEach((li) => enfants.push(para([new TextRun({ text: "• ", font: police, size: taille }), ...runsDe(li)], sh)));
+        else if (n.nodeType === 1 && n.matches?.("b.t")) enfants.push(para(runsDe(n, { bold: true }), sh));
+        else if (n.textContent.trim()) enfants.push(para(runsDe(n.nodeType === 3 ? { childNodes: [n] } : n), sh));
+      });
+      return;
+    }
+    if (tag === "section") {
+      const h = el.querySelector(":scope > header");
+      if (h) { const [a, b] = h.children; enfants.push(new Paragraph({ children: [...runsDe(a ?? h, { bold: true, color: "1F4E8C" }), new TextRun({ text: "\t" }), ...(b ? runsDe(b, { bold: true, color: "1F4E8C" }) : [])], tabStops: [{ type: TabStopType.RIGHT, position: 9600 }], border: { top: { style: BorderStyle.SINGLE, size: 12, color: "1F4E8C", space: 4 } }, spacing: { before: 220, after: 90 } })); }
+      [...el.childNodes].filter((n) => n !== h).forEach(visiter);
+      return;
+    }
+    if (tag === "table") return tableDe(el, true);
+    if (cl.contains("grille")) {
+      const n = cl.contains("g3") ? 3 : 2, items = [...el.children];
+      const t = el.ownerDocument.createElement("table");
+      for (let i = 0; i < items.length; i += n) { const tr = el.ownerDocument.createElement("tr"); items.slice(i, i + n).forEach((it) => { const td = el.ownerDocument.createElement("td"); td.innerHTML = it.innerHTML; tr.append(td); }); t.append(tr); }
+      return tableDe(t, false);
+    }
+    if (cl.contains("deux-col")) return [...el.children].forEach((c) => (c.tagName === "DIV" && !c.className ? [...c.childNodes].forEach(visiter) : visiter(c)));
+    if (cl.contains("donnees")) return enfants.push(para([...el.children].flatMap((s, i) => [...(i ? [new TextRun({ text: "      " })] : []), ...runsDe(s, s.classList.contains("i") ? {} : { bold: true })])));
+    if (tag === "ul" || tag === "ol") return el.querySelectorAll(":scope > li").forEach((li, i) => enfants.push(para([new TextRun({ text: tag === "ol" ? `${i + 1}. ` : "• ", font: police, size: taille }), ...runsDe(li)], { indent: { left: 300 } })));
+    if (cl.contains("figure-originale")) return enfants.push(para(runsDe(el, { italics: true, color: "7A4A00" })));
+    if (tag === "div" && [...el.children].some((c) => ["SECTION", "DIV", "TABLE", "UL", "P"].includes(c.tagName)) && !cl.contains("etape")) return [...el.childNodes].forEach(visiter);
+    enfants.push(para(runsDe(el)));
+  };
+  [...racine.childNodes].forEach(visiter);
+  const fond = p.fond.replace("#", "");
+  return new Document({
+    creator: "Adaptateur PAP",
     ...(fond !== "FFFFFF" ? { background: { color: fond } } : {}),
     styles: { default: { document: { run: { font: police, size: taille } } } },
     sections: [{ properties: { page: { margin: { top: 900, bottom: 900, left: 1000, right: 1000 } } }, children: enfants }],

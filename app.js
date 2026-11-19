@@ -1,11 +1,11 @@
 // =====================================================================
 //  Adaptateur PAP — application professeur
-//  JR Enseignement — v1
+//  JR Enseignement — v3
 // =====================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  FONDS, POLICES, parametres, rendreHtml, cssRendu, pageHtmlAutonome, structureVersContenu,
-  normaliser, docxDepuisContenu, tiersTemps, echapper, texteBloc, rendreCorrigeHtml, svgFigure, figuresDe, pourImpression,
+  FONDS, POLICES, parametres, tiersTemps, echapper, svgFigure, pourImpression,
+  cssCharte, hydraterDom, htmlPourStockage, corrigeHtml, pageAutonomeV3, docxDepuisDom,
 } from "./rendu.js";
 
 const SUPA_URL = "https://mfykdfytbnajxfnkjhwz.supabase.co";
@@ -17,7 +17,6 @@ const NIVEAUX_CLASSE = [
   ["premiere", "Première"], ["terminale", "Terminale"], ["bts", "BTS"], ["superieur_autre", "Autre post-bac"],
 ];
 const NIVEAUX_ADAPT = { forme: "Forme seule", consignes: "Forme + consignes", fond: "Forme + fond", hors_document: "Hors document" };
-const TYPES_TACHE = ["restitution", "identification", "calcul", "analyse", "justification", "redaction", "trace", "autre"];
 
 const E = {
   user: null, admin: false, etabs: [], etab: null, role: null,
@@ -67,7 +66,11 @@ async function appelMoteur(corps) {
     body: JSON.stringify(corps),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.erreur ?? `Erreur du moteur (${r.status})`);
+  if (!r.ok) {
+    const e = new Error(j.erreur ?? (r.status === 546 || r.status === 504 ? "Le traitement a dépassé le temps autorisé." : `Erreur du moteur (${r.status})`));
+    e.statut = r.status;
+    throw e;
+  }
   return j;
 }
 
@@ -266,12 +269,10 @@ function vueProfil(c, eleve) {
   const majApercu = () => {
     compteur.textContent = `${coches.size} adaptation(s) cochée(s)`;
     const p = parametres([...coches], prefs, E.profilsNiveau[c.niveau]);
-    const exemple = { titre: "Aperçu", duree_minutes: 55, sections: [{ id: "E1", titre: "Exercice 1", blocs: [
-      { type: "consigne", texte: "Lisez le document 1 puis répondez aux questions." },
-      { type: "document", titre: "Document 1", texte: "En 2025, l’entreprise a réalisé un chiffre d’affaires de 125000 euros.\nSes charges s’élèvent à 98000 euros.\nElle souhaite investir dans un nouveau local.\nLe dirigeant hésite entre l’achat et la location.\nUne étude de marché est en cours." },
-      { type: "question", numero: "1", texte: "Calculez le résultat de l’entreprise.", points: 2 },
-      { type: "zone_reponse", lignes: 2 }] }], bareme: [] };
-    apercu.innerHTML = `<style>${cssRendu(p)}</style>${rendreHtml(exemple, p, { identifiant: eleve.identifiant })}`;
+    const exemple = `<section class="exo" data-exo="1"><header><span>Exercice 1 — Le résultat de l’entreprise</span><span>…… / 2 points</span></header>
+<div class="encadre"><b class="t">Document 1</b>En 2025, l’entreprise a réalisé un chiffre d’affaires de 125 000 €. Ses charges s’élèvent à 98 000 €.</div>
+<p><b>Calcule</b> le résultat de l’entreprise.</p><div class="check">Résultat = chiffre d’affaires − charges</div><div class="lignes" data-n="2"></div></section>`;
+    apercu.replaceChildren(apercuDocument(exemple, p, { min: "0" }));
   };
 
   const familles = [...new Set(E.referentiel.map((a) => a.famille))];
@@ -338,12 +339,14 @@ function vueProfil(c, eleve) {
 }
 
 // ---------------------------------------------------------------------
-//  Documents : liste et parcours guidé
+//  Documents : liste et parcours guidé (v3 — le modèle compose le document)
 // ---------------------------------------------------------------------
 const ETAPES = ["Déposer", "Vérifier la lecture", "Choisir les élèves", "Générer", "Propositions et ajustements", "Exporter"];
 function bandeau(n) {
   return h("div", { class: "etapes" }, ETAPES.map((t, i) => h("span", { class: i < n ? "fait" : i === n ? "cour" : "" }, `${i + 1}. ${t}`)));
 }
+const LIENS_POLICES = `<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;600&display=swap" rel="stylesheet"><link href="https://fonts.cdnfonts.com/css/opendyslexic" rel="stylesheet">`;
+const estV3 = (v) => v?.contenu?.format === "html";
 
 async function vueDocuments() {
   afficher(chargement("Chargement des documents…"));
@@ -363,7 +366,7 @@ async function vueDocuments() {
 async function chargerDoc(id) { return verifier(await sb.from("documents").select("*, classes(*)").eq("id", id).single()); }
 async function reprendre(id) {
   const d = await chargerDoc(id);
-  if (d.statut === "depose") return etapeLecture(d);
+  if (d.statut === "depose" || d.structure?.version !== 3) return etapeLecture(d);
   if (d.statut === "lu") return etapeVerification(d);
   if (d.statut === "structure_validee") return etapeEleves(d);
   return etapePropositions(d);
@@ -374,7 +377,7 @@ async function etapeDepot() {
   const classes = verifier(await sb.from("classes").select("*").eq("etablissement_id", E.etab.id).order("nom"));
   if (!classes.length) return afficher(bandeau(0), message("info", "Créez d’abord une classe et ses élèves."), h("button", { class: "btn", onclick: () => aller("classes") }, "Mes classes"));
   const type = h("select", {}, h("option", { value: "evaluation" }, "Évaluation"), h("option", { value: "cours" }, "Cours"));
-  const titre = h("input", { placeholder: "Ex. : Évaluation chapitre 3 — la valeur ajoutée" });
+  const titre = h("input", { placeholder: "Ex. : Évaluation chapitre 3 — les nombres relatifs" });
   const classe = h("select", {}, classes.map((c) => h("option", { value: c.id }, c.nom)));
   const fichier = h("input", { type: "file", accept: ".pdf,.docx,.txt,.html,image/*" });
   const texte = h("textarea", { placeholder: "… ou collez ici le texte du document", style: "min-height:8rem" });
@@ -383,22 +386,18 @@ async function etapeDepot() {
     h("h2", {}, "Déposer un document"),
     h("div", { class: "grille" }, h("div", {}, h("label", {}, "Type"), type), h("div", {}, h("label", {}, "Classe"), classe)),
     h("label", {}, "Titre"), titre,
-    h("label", {}, "Fichier : PDF, Word (.docx), photo ou scan"), fichier,
-    h("p", { class: "doux" }, "PowerPoint : enregistrez-le d’abord en PDF. Une photo du tableau fonctionne aussi pour un cours."),
+    h("label", {}, "Fichier : PDF (le plus fidèle), photo ou scan, Word (.docx)"), fichier,
+    h("p", { class: "doux" }, "Le PDF et la photo sont lus tels quels, figures comprises. Pour un fichier Word avec des figures, enregistrez-le plutôt en PDF. PowerPoint : enregistrez-le en PDF."),
     texte,
     h("button", { class: "btn", style: "margin-top:1rem", onclick: () => essai(async () => {
       if (!titre.value.trim()) throw new Error("Donnez un titre au document.");
       const f = fichier.files[0];
       if (!f && !texte.value.trim()) throw new Error("Choisissez un fichier ou collez un texte.");
       zone.replaceChildren(chargement("Envoi du document…"));
-      const doc = verifier(await sb.from("documents").insert({
-        etablissement_id: E.etab.id, professeur_id: E.user.id, classe_id: classe.value, type: type.value, titre: titre.value.trim(),
-      }).select().single());
       let blob, ext, ftype;
       if (!f) { blob = new Blob([texte.value], { type: "text/plain" }); ext = "txt"; ftype = "texte"; }
       else {
-        const nom = f.name.toLowerCase();
-        ext = nom.split(".").pop();
+        ext = f.name.toLowerCase().split(".").pop();
         if (ext === "docx") {
           await chargerScript("https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js");
           const r = await window.mammoth.convertToHtml({ arrayBuffer: await f.arrayBuffer() });
@@ -406,9 +405,12 @@ async function etapeDepot() {
         } else if (ext === "pdf") { blob = f; ftype = "pdf"; }
         else if (f.type.startsWith("image/")) { blob = f; ftype = ["png", "webp", "gif"].includes(ext) ? ext : "jpg"; }
         else if (["txt", "html"].includes(ext)) { blob = f; ftype = "texte"; }
-        else throw new Error("Format non pris en charge. Utilisez PDF, Word, une image ou du texte.");
+        else throw new Error("Format non pris en charge. Utilisez PDF, une image, Word ou du texte.");
       }
       if (blob.size > 25 * 1024 * 1024) throw new Error("Fichier trop lourd (25 Mo maximum).");
+      const doc = verifier(await sb.from("documents").insert({
+        etablissement_id: E.etab.id, professeur_id: E.user.id, classe_id: classe.value, type: type.value, titre: titre.value.trim(),
+      }).select().single());
       const chemin = `${E.user.id}/${doc.id}/source.${ext}`;
       verifier(await sb.storage.from("documents").upload(chemin, blob, { upsert: true, contentType: blob.type || undefined }));
       verifier(await sb.from("documents").update({ fichier_path: chemin, fichier_type: ftype }).eq("id", doc.id));
@@ -423,94 +425,90 @@ function chargerScript(src) {
   });
 }
 
-// Étape 2a : lecture par le moteur
+// Visionneuse de l'original, tel que déposé
+async function visionneuse(d) {
+  const boite = h("div", { class: "original" }, chargement("Affichage de l’original…"));
+  essai(async () => {
+    const { data: f, error } = await sb.storage.from("documents").download(d.fichier_path);
+    if (error) throw new Error("Fichier original introuvable.");
+    const t = d.fichier_type;
+    if (t === "pdf") {
+      const pdfjs = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs");
+      pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
+      const pdf = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+      boite.replaceChildren();
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const vp = page.getViewport({ scale: 1.6 });
+        const cv = h("canvas", { width: Math.round(vp.width), height: Math.round(vp.height), style: "width:100%;height:auto;display:block;margin-bottom:.6rem;box-shadow:0 1px 4px rgba(0,0,0,.15);background:#fff" });
+        boite.append(cv);
+        await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+      }
+    } else if (t === "texte") {
+      const fr = h("iframe", { sandbox: "", style: "width:100%;height:70vh;border:0;background:#fff" });
+      fr.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><body style="font-family:Arial;padding:1rem">${/\.html$/.test(d.fichier_path) ? await f.text() : `<pre style="white-space:pre-wrap">${echapper(await f.text())}</pre>`}</body>`;
+      boite.replaceChildren(fr);
+    } else {
+      boite.replaceChildren(h("img", { src: URL.createObjectURL(f), alt: "Document original", style: "width:100%;height:auto;display:block" }));
+    }
+  }, boite);
+  return boite;
+}
+
+// Étape 2a : analyse par le moteur
 async function etapeLecture(d) {
-  const zone = h("div", {}, chargement("Lecture du document par l’IA… (20 à 90 secondes)"));
+  const zone = h("div", {}, chargement("Lecture du document… (20 à 60 secondes)"));
   afficher(bandeau(1), h("div", { class: "carte" }, h("h2", {}, d.titre), zone));
-  const r = await essai(() => appelMoteur({ action: "lire", document_id: d.id }), zone);
+  const r = await essai(() => appelMoteur({ action: "analyser", document_id: d.id }), zone);
   if (r) etapeVerification(await chargerDoc(d.id));
   else zone.append(h("button", { class: "btn sec", onclick: () => etapeLecture(d) }, "Réessayer"));
 }
 
-// Étape 2b : vérification de la lecture
-function etapeVerification(d) {
+// Étape 2b : vérification — l'original tel quel, et ce que l'outil en a compris
+async function etapeVerification(d) {
   const s = structuredClone(d.structure ?? {});
+  s.exercices = s.exercices ?? [];
+  const mot = d.type === "cours" ? "Partie" : "Exercice";
   const zone = h("div");
-  if (d.type === "cours" || !s.exercices) return verificationCours(d, s);
-
+  const liste = h("div");
   const total = h("b");
-  const majTotal = () => { total.textContent = s.exercices.reduce((t, e) => t + (e.questions ?? []).reduce((u, q) => u + (Number(q.points) || 0), 0), 0); };
-  const champ = (obj, cle, opts = {}) => {
-    const el = h(opts.zone ? "textarea" : "input", { value: obj[cle] ?? "", type: opts.type, oninput: (e) => { obj[cle] = opts.type === "number" ? (e.target.value === "" ? null : +e.target.value) : e.target.value; if (opts.type === "number") majTotal(); } });
-    if (opts.style) el.style.cssText = opts.style;
-    return el;
+  const majTotal = () => { total.textContent = s.exercices.reduce((t, e) => t + (Number(e.points) || 0), 0); };
+  const dessiner = () => {
+    liste.replaceChildren(...s.exercices.map((ex, i) => h("div", { class: "q-edit" },
+      h("div", { class: "ligne" },
+        h("b", {}, mot), h("input", { value: ex.numero ?? "", style: "width:4rem", oninput: (e) => { ex.numero = e.target.value; } }),
+        h("input", { value: ex.titre ?? "", style: "flex:1;min-width:180px", oninput: (e) => { ex.titre = e.target.value; } }),
+        d.type === "cours" ? null : h("span", {}, h("input", { type: "number", value: ex.points ?? "", style: "width:4.5rem", oninput: (e) => { ex.points = e.target.value === "" ? null : +e.target.value; majTotal(); } }), " pts"),
+        h("label", { class: "ligne", style: "font-weight:normal;margin:0" }, h("input", { type: "checkbox", checked: !!ex.figures, onchange: (e) => { ex.figures = e.target.checked; } }), "figure"),
+        h("button", { class: "btn discret", title: "Retirer", onclick: () => { s.exercices.splice(i, 1); dessiner(); majTotal(); } }, "✕")),
+      ex.resume ? h("div", { class: "doux", style: "margin-top:.2rem" }, ex.resume) : null)));
   };
-  const exos = s.exercices.map((ex) => h("div", { class: "carte" },
-    h("div", { class: "ligne" }, h("b", {}, ex.id), champ(ex, "titre", { style: "flex:1;min-width:240px" })),
-    h("label", {}, "Consigne générale"), champ(ex, "consigne_generale", { zone: true }),
-    (ex.documents ?? []).map((doc) => h("div", {}, h("label", {}, `Document ${doc.id}${doc.titre ? " — " + doc.titre : ""}`), champ(doc, "contenu", { zone: true }))),
-    (ex.figures ?? []).map((f) => editeurFigure(f)),
-    (ex.questions ?? []).map((q) => h("div", { class: "q-edit" },
-      h("div", { class: "ligne" }, h("b", {}, q.id), h("span", {}, "N°"), champ(q, "numero", { style: "width:4rem" }),
-        h("span", {}, "Points"), champ(q, "points", { type: "number", style: "width:5rem" }),
-        h("span", {}, "Tâche"), h("select", { style: "width:auto", onchange: (e) => { q.type_tache = e.target.value; } },
-          TYPES_TACHE.map((t) => h("option", { value: t, selected: q.type_tache === t }, t)))),
-      h("label", {}, "Énoncé"), champ(q, "enonce", { zone: true }),
-      h("label", {}, "Compétence évaluée (l’outil garantit qu’elle reste évaluée)"), champ(q, "competence"))),
-  ));
-  majTotal();
+  dessiner(); majTotal();
+  const original = await visionneuse(d);
   afficher(bandeau(1),
     h("h2", {}, `Vérifier la lecture — ${d.titre}`),
-    message("info", "Relisez ce que l’outil a compris : énoncés, points et compétence de chaque question. Corrigez si besoin. Les adaptations s’appuieront sur cette version."),
-    (s.alertes_lecture ?? []).length ? h("div", { class: "msg err" }, h("b", {}, "Passages difficiles à lire — vérifiez-les : "), h("ul", {}, s.alertes_lecture.map((a) => h("li", {}, a)))) : null,
-    h("div", { class: "carte" }, h("div", { class: "grille" },
-      h("div", {}, h("label", {}, "Titre"), champ(s, "titre")),
-      h("div", {}, h("label", {}, "Durée (minutes)"), champ(s, "duree_minutes", { type: "number" })),
-      h("div", {}, h("label", {}, "Barème total"), h("p", {}, total, " points")))),
-    exos,
-    h("div", { class: "ligne" }, h("button", { class: "btn", onclick: () => essai(async () => {
-      const sansComp = s.exercices.flatMap((e) => e.questions ?? []).filter((q) => !String(q.competence ?? "").trim());
-      if (sansComp.length) throw new Error(`Indiquez la compétence des questions : ${sansComp.map((q) => q.id).join(", ")}.`);
-      verifier(await sb.from("documents").update({ structure: s, statut: "structure_validee" }).eq("id", d.id));
-      etapeEleves(await chargerDoc(d.id));
-    }, zone) }, "Valider la lecture"),
-    h("button", { class: "btn sec", onclick: () => etapeLecture(d) }, "Relire le document")), zone);
-}
-
-function editeurFigure(f) {
-  const apercu = h("div", { class: "apercu", style: "padding:.5rem;background:#fff" });
-  const dessiner = () => {
-    if (f.type === "droite_graduee" || f.type === "repere") apercu.innerHTML = svgFigure(f);
-    else apercu.textContent = f.description ?? "(figure décrite en texte)";
-  };
-  const zone = h("textarea", { style: "font-family:monospace;font-size:.85rem;min-height:6rem", value: JSON.stringify(f, null, 1) });
-  const err = h("div");
-  zone.addEventListener("input", () => {
-    try { const n = JSON.parse(zone.value); Object.keys(f).forEach((k) => delete f[k]); Object.assign(f, n); err.replaceChildren(); dessiner(); }
-    catch { err.replaceChildren(message("err", "Format invalide : vérifiez les virgules et les guillemets.")); }
-  });
-  dessiner();
-  return h("div", { class: "q-edit" },
-    h("b", {}, `Figure ${f.id ?? ""}${f.titre ? " — " + f.titre : ""}`),
-    h("p", { class: "doux" }, "Vérifiez que la figure redessinée correspond à l’original (valeurs, points)."),
-    apercu,
-    h("details", {}, h("summary", {}, "Corriger les valeurs de la figure"), zone, err));
-}
-
-function verificationCours(d, s) {
-  s.parties = s.parties ?? [];
-  const zone = h("div");
-  afficher(bandeau(1), h("h2", {}, `Vérifier la lecture — ${d.titre}`),
-    message("info", "Relisez le cours tel que l’outil l’a compris. Corrigez si besoin."),
-    h("div", { class: "carte" }, h("label", {}, "Titre"), h("input", { value: s.titre ?? "", oninput: (e) => { s.titre = e.target.value; } })),
-    s.parties.map((p) => h("div", { class: "carte" },
-      h("input", { value: p.titre ?? "", oninput: (e) => { p.titre = e.target.value; }, style: "font-weight:600" }),
-      (p.blocs ?? []).map((b) => h("div", { class: "q-edit" }, h("span", { class: "pastille" }, b.type ?? "bloc"),
-        h("textarea", { value: texteBloc(b), oninput: (e) => { b.texte = e.target.value; delete b.contenu; } }))))),
-    h("button", { class: "btn", onclick: () => essai(async () => {
-      verifier(await sb.from("documents").update({ structure: s, statut: "structure_validee" }).eq("id", d.id));
-      etapeEleves(await chargerDoc(d.id));
-    }, zone) }, "Valider la lecture"), zone);
+    message("info", `À gauche, votre document tel que vous l’avez déposé. À droite, le découpage compris par l’outil : chaque ${mot.toLowerCase()} sera adapté à partir de l’original, figures comprises.`),
+    h("div", { style: "display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,1fr);gap:1rem;align-items:start" },
+      h("div", { class: "carte", style: "max-height:80vh;overflow:auto;background:#F3F4F6" }, original),
+      h("div", {},
+        (s.alertes_lecture ?? []).length ? h("div", { class: "msg err" }, h("b", {}, "À vérifier sur l’original : "), h("ul", {}, s.alertes_lecture.map((a) => h("li", {}, a)))) : null,
+        h("div", { class: "carte" },
+          h("label", {}, "Titre"), h("input", { value: s.titre ?? "", oninput: (e) => { s.titre = e.target.value; } }),
+          h("div", { class: "grille" },
+            h("div", {}, h("label", {}, "Matière"), h("input", { value: s.matiere ?? "", oninput: (e) => { s.matiere = e.target.value; } })),
+            h("div", {}, h("label", {}, "Durée (minutes)"), h("input", { type: "number", value: s.duree_minutes ?? "", oninput: (e) => { s.duree_minutes = e.target.value === "" ? null : +e.target.value; } }))),
+          d.type === "cours" ? null : h("p", {}, "Total des points lus : ", total, s.total_points != null ? ` (indiqué sur le sujet : ${s.total_points})` : "")),
+        h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, `${mot}s`), liste,
+          h("button", { class: "btn discret", onclick: () => { s.exercices.push({ numero: String(s.exercices.length + 1), titre: "", points: null }); dessiner(); } }, `+ ajouter un${d.type === "cours" ? "e partie" : " exercice"}`)),
+        h("div", { class: "ligne" },
+          h("button", { class: "btn", onclick: () => essai(async () => {
+            if (!s.exercices.length) throw new Error(`Il faut au moins un${d.type === "cours" ? "e partie" : " exercice"}.`);
+            if (s.exercices.some((e) => !String(e.numero ?? "").trim())) throw new Error("Chaque ligne doit avoir un numéro.");
+            if (d.type !== "cours" && s.exercices.some((e) => e.points != null)) s.total_points = s.exercices.reduce((t, e) => t + (Number(e.points) || 0), 0);
+            verifier(await sb.from("documents").update({ structure: s, statut: "structure_validee" }).eq("id", d.id));
+            etapeEleves(await chargerDoc(d.id));
+          }, zone) }, "Valider et choisir les élèves"),
+          h("button", { class: "btn sec", onclick: () => etapeLecture(d) }, "Relire le document")), zone)));
 }
 
 // Étape 3 : élèves concernés
@@ -522,157 +520,265 @@ async function etapeEleves(d) {
   const zone = h("div");
   if (!eleves.length) return afficher(bandeau(2), message("info", "Cette classe n’a pas encore d’élève avec un profil PAP."), h("button", { class: "btn", onclick: () => vueClasse(d.classes) }, "Ajouter des élèves"));
   afficher(bandeau(2), h("h2", {}, `Élèves concernés — ${d.titre}`),
+    message("info", "Une proposition est générée par élève, au niveau choisi. Vous pourrez en demander d’autres ensuite."),
     h("div", { class: "carte" }, h("table", { class: "liste" },
-      h("tr", {}, h("th", {}, ""), h("th", {}, "Élève"), h("th", {}, "Adaptations"), h("th", {}, "Niveau maximal pour ce document")),
+      h("tr", {}, h("th", {}, ""), h("th", {}, "Élève"), h("th", {}, "Adaptations du PAP"), h("th", {}, "Niveau d’adaptation")),
       eleves.map((e) => {
         const p = e.profils_eleves ?? {};
         const sel = h("select", { onchange: (ev) => { if (choix.has(e.id)) choix.set(e.id, ev.target.value); } },
-          ["forme", "consignes", "fond"].map((v) => h("option", { value: v, selected: (choix.get(e.id) ?? p.niveau_max ?? "fond") === v }, NIVEAUX_ADAPT[v])));
+          ["forme", "consignes", "fond"].map((v) => h("option", { value: v, selected: (choix.get(e.id) ?? p.niveau_max ?? "consignes") === v }, NIVEAUX_ADAPT[v])));
         return h("tr", {},
           h("td", {}, h("input", { type: "checkbox", checked: choix.has(e.id), onchange: (ev) => { ev.target.checked ? choix.set(e.id, sel.value) : choix.delete(e.id); } })),
           h("td", {}, h("b", {}, e.identifiant)),
           h("td", { class: "doux" }, (p.codes ?? []).join(" ") || "aucune — profil à remplir"),
           h("td", {}, sel));
       }))),
+    h("p", { class: "doux" }, "Forme seule : mêmes mots, présentation adaptée. Forme + consignes : consignes reformulées et découpées. Forme + fond : allègements prévus par le PAP (compétences conservées)."),
     h("button", { class: "btn", onclick: () => essai(async () => {
       if (!choix.size) throw new Error("Cochez au moins un élève.");
       verifier(await sb.from("document_eleves").delete().eq("document_id", d.id));
       verifier(await sb.from("document_eleves").insert([...choix].map(([eleve_id, niveau_max]) => ({ document_id: d.id, eleve_id, niveau_max }))));
-      etapeGeneration(d, eleves.filter((e) => choix.has(e.id)));
-    }, zone) }, "Générer les propositions"), zone);
+      etapeGeneration(d, eleves.filter((e) => choix.has(e.id)).map((e) => ({ eleve: e, niveau: choix.get(e.id) })));
+    }, zone) }, "Générer les adaptations"), zone);
 }
 
-// Étape 4 : génération
-async function etapeGeneration(d, eleves) {
-  const lignes = new Map(eleves.map((e) => [e.id, h("li", {}, `${e.identifiant} — en attente`)]));
-  afficher(bandeau(3), h("h2", {}, "Génération des propositions"),
-    message("info", "Une proposition est produite par niveau autorisé. Les élèves au profil identique partagent la même génération."),
-    h("div", { class: "carte" }, h("ul", {}, [...lignes.values()])));
-  for (const e of eleves) {
-    const li = lignes.get(e.id);
-    li.replaceChildren(h("span", { class: "chargement" }), ` ${e.identifiant} — adaptation en cours…`);
-    try {
-      const r = await appelMoteur({ action: "adapter", document_id: d.id, eleve_id: e.id });
-      li.replaceChildren(`✓ ${e.identifiant} — ${r.propositions.length} proposition(s)`);
-    } catch (err) { li.replaceChildren(h("span", { style: "color:var(--erreur)" }, `✗ ${e.identifiant} — ${err.message}`)); }
+// Étape 4 : génération (exercices par groupes, appels en parallèle)
+function limiteur(n) {
+  let actifs = 0; const file = [];
+  const suivant = () => {
+    if (actifs >= n || !file.length) return;
+    actifs++; const { fn, ok, ko } = file.shift();
+    fn().then(ok, ko).finally(() => { actifs--; suivant(); });
+  };
+  return (fn) => new Promise((ok, ko) => { file.push({ fn, ok, ko }); suivant(); });
+}
+const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+async function appelMoteurRelance(corps, surAttente) {
+  for (let i = 0; ; i++) {
+    try { return await appelMoteur(corps); } catch (e) {
+      const passager = [429, 503, 504, 546].includes(e.statut) || e.statut == null;
+      if (!passager || i >= 3) throw e;
+      surAttente?.(`nouvel essai dans ${20 * (i + 1)} s`);
+      await attendre(20000 * (i + 1));
+    }
   }
-  etapePropositions(await chargerDoc(d.id));
+}
+function groupesExercices(exos) {
+  const g = []; let cur = [], poids = 0;
+  for (const e of exos) {
+    const w = e.figures ? 2 : 1;
+    if (cur.length && poids + w > 2) { g.push(cur); cur = []; poids = 0; }
+    cur.push(String(e.numero)); poids += w;
+  }
+  if (cur.length) g.push(cur);
+  return g;
+}
+function horsDocument(codes) {
+  const parCode = new Map(E.referentiel.map((a) => [a.code, a]));
+  return (codes ?? []).map((c) => parCode.get(c)).filter((a) => a?.niveau === "hors_document").map((a) => ({ code: a.code, libelle: a.libelle, regles: a.regles }));
+}
+
+async function genererPourEleve(d, eleve, niveau, file, surProgres) {
+  const groupes = groupesExercices(d.structure?.exercices ?? []);
+  if (!groupes.length) throw new Error("Aucun exercice dans la lecture validée.");
+  let faits = 0;
+  surProgres(`0 / ${groupes.length} parties`);
+  const parties = await Promise.all(groupes.map((exercices, i) => file(async () => {
+    const r = await appelMoteurRelance({ action: "adapter_partie", document_id: d.id, eleve_id: eleve.id, niveau, exercices, premiere: i === 0 },
+      (m) => surProgres(`${faits} / ${groupes.length} parties — service occupé, ${m}`));
+    faits++; surProgres(`${faits} / ${groupes.length} parties`);
+    return r;
+  })));
+  const application = new Map();
+  parties.flatMap((p) => p.application ?? []).forEach((a) => {
+    const x = application.get(a.code);
+    application.set(a.code, x ? { ...x, applique: x.applique || a.applique, detail: [x.detail, a.detail].filter(Boolean).join(" ; ") } : a);
+  });
+  const contenu = { format: "html", html: parties.map((p) => p.html).join("\n"), corrige: parties.flatMap((p) => p.corrige ?? []) };
+  const precedentes = verifier(await sb.from("versions").select("id, parent_id").eq("document_id", d.id).eq("eleve_id", eleve.id));
+  verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", eleve.id));
+  return verifier(await sb.from("versions").insert({
+    document_id: d.id, eleve_id: eleve.id, niveau, contenu,
+    numero_proposition: precedentes.filter((v) => !v.parent_id).length + 1,
+    resume_modifications: parties.flatMap((p) => p.resume_modifications ?? []),
+    controle: { application: [...application.values()], alertes: parties.flatMap((p) => p.alertes ?? []), hors_document: horsDocument(eleve.profils_eleves?.codes) },
+    auteur: "ia", choisie: true,
+  }).select().single());
+}
+
+async function etapeGeneration(d, demandes, retour) {
+  const lignes = new Map(demandes.map(({ eleve }) => [eleve.id, h("li", {}, `${eleve.identifiant} — en attente`)]));
+  const nGroupes = groupesExercices(d.structure?.exercices ?? []).length;
+  afficher(bandeau(3), h("h2", {}, "Génération des adaptations"),
+    message("info", `Le document est adapté en ${nGroupes} partie(s) par élève, traitées en parallèle à partir de l’original. Comptez une à trois minutes par élève. Restez sur cette page.`),
+    h("div", { class: "carte" }, h("ul", {}, [...lignes.values()])));
+  verifier(await sb.from("documents").update({ statut: "en_adaptation" }).eq("id", d.id));
+  const file = limiteur(3);
+  let erreurs = 0;
+  await Promise.all(demandes.map(async ({ eleve, niveau }) => {
+    const li = lignes.get(eleve.id);
+    const etat = (t) => li.replaceChildren(h("span", { class: "chargement" }), ` ${eleve.identifiant} (${NIVEAUX_ADAPT[niveau]}) — ${t}`);
+    try {
+      await genererPourEleve(d, eleve, niveau, file, etat);
+      li.replaceChildren(`✓ ${eleve.identifiant} — adaptation prête`);
+    } catch (err) {
+      erreurs++;
+      li.replaceChildren(h("span", { style: "color:var(--erreur)" }, `✗ ${eleve.identifiant} — ${err.message}`));
+    }
+  }));
+  if (erreurs) {
+    $app().append(h("div", { class: "ligne" },
+      h("button", { class: "btn", onclick: () => etapePropositions(d, retour) }, "Voir les adaptations"),
+      h("button", { class: "btn sec", onclick: () => etapeGeneration(d, demandes, retour) }, "Relancer")));
+  } else etapePropositions(await chargerDoc(d.id), retour ?? demandes[0]?.eleve.id);
+}
+
+// Aperçu fidèle (iframe isolée, même rendu que le PDF)
+function apercuDocument(html, p, { editable = false, min = "60vh" } = {}) {
+  const fr = h("iframe", { title: "Aperçu du document adapté", style: `width:100%;border:0;display:block;min-height:${min};background:#fff` });
+  fr.srcdoc = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">${LIENS_POLICES}<style>body{margin:0;background:${p.fond}}${cssCharte(p)}.sujet{padding:1.2cm 1.6cm;max-width:21cm;margin:0 auto;box-sizing:border-box}</style></head><body><div class="sujet">${html}</div></body></html>`;
+  const ajuster = () => { try { fr.style.height = fr.contentDocument.documentElement.scrollHeight + 20 + "px"; } catch { /* rien */ } };
+  fr.addEventListener("load", () => {
+    const racine = fr.contentDocument.querySelector(".sujet");
+    hydraterDom(racine);
+    if (editable) racine.setAttribute("contenteditable", "true");
+    fr.contentDocument.fonts?.ready.then(ajuster);
+    new ResizeObserver(ajuster).observe(fr.contentDocument.body);
+    ajuster();
+  });
+  fr.racine = () => fr.contentDocument?.querySelector(".sujet");
+  return fr;
+}
+
+function fusionnerSections(html, sections) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const r = t.content;
+  for (const s of sections) {
+    const n = document.createElement("template"); n.innerHTML = s.html;
+    if (s.exo === "entete") {
+      const premier = r.querySelector("section.exo");
+      if (premier) {
+        [...r.childNodes].filter((x) => x !== premier && (x.compareDocumentPosition(premier) & Node.DOCUMENT_POSITION_FOLLOWING)).forEach((x) => x.remove());
+        premier.before(n.content);
+      } else r.prepend(n.content);
+    } else {
+      const cible = r.querySelector(`section.exo[data-exo="${CSS.escape(s.exo)}"]`);
+      if (cible) cible.replaceWith(n.content); else r.append(n.content);
+    }
+  }
+  const div = document.createElement("div"); div.append(r);
+  return div.innerHTML;
+}
+function fusionnerCorrige(ancien = [], nouveau = []) {
+  const m = new Map(ancien.map((c) => [String(c.exercice), c]));
+  nouveau.forEach((c) => m.set(String(c.exercice), c));
+  return [...m.values()];
 }
 
 // Étape 5 : propositions, aperçu, ajustements
 async function etapePropositions(d, eleveActif) {
-  afficher(chargement("Chargement des propositions…"));
+  afficher(chargement("Chargement des adaptations…"));
   const liens = verifier(await sb.from("document_eleves").select("niveau_max, eleves(*, profils_eleves(*))").eq("document_id", d.id));
-  const eleves = liens.map((l) => l.eleves).filter(Boolean).sort((a, b) => a.identifiant.localeCompare(b.identifiant));
+  const eleves = liens.map((l) => ({ ...l.eleves, niveau_doc: l.niveau_max })).filter((e) => e.id).sort((a, b) => a.identifiant.localeCompare(b.identifiant));
   if (!eleves.length) return etapeEleves(d);
   const actif = eleves.find((e) => e.id === eleveActif) ?? eleves[0];
-  const versions = verifier(await sb.from("versions").select("*").eq("document_id", d.id).eq("eleve_id", actif.id).order("created_at"));
+  const versions = verifier(await sb.from("versions").select("*").eq("document_id", d.id).eq("eleve_id", actif.id).order("created_at")).filter(estV3);
   const profil = actif.profils_eleves ?? {};
-  const niveauClasse = E.profilsNiveau[d.classes?.niveau];
-
-  const props = versions.filter((v) => !v.parent_id);
-  let courante = versions.find((v) => v.choisie) ?? versions[versions.length - 1];
-  const feuille = h("div", { class: "feuille" });
+  const p = parametres(profil.codes ?? [], profil.preferences ?? {}, E.profilsNiveau[d.classes?.niveau]);
+  const racines = versions.filter((v) => !v.parent_id);
+  let courante = versions.find((v) => v.choisie) ?? versions.at(-1);
+  const feuille = h("div", { class: "feuille", style: "max-height:none;background:#E9ECF1;padding:.6rem" });
   const panneau = h("div");
+  let cadre = null;
 
-  // La mise en forme du profil s'applique à toutes les propositions, y compris « Forme seule ».
-  const params = () => parametres(profil.codes ?? [], profil.preferences ?? {}, niveauClasse);
-  const montrer = (v) => {
+  const montrer = (v, editable = false) => {
     courante = v;
-    const p = params(v);
-    feuille.innerHTML = `<style>${cssRendu(p)}</style>${rendreHtml(v.contenu, p, { identifiant: actif.identifiant })}`;
-    panneauDroit();
+    cadre = apercuDocument(v.contenu.html, p, { editable });
+    feuille.replaceChildren(cadre);
+    editable ? panneauEdition() : panneauDroit();
+  };
+  const enregistrer = async (contenu, extra) => {
+    verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", actif.id));
+    verifier(await sb.from("versions").insert({
+      document_id: d.id, eleve_id: actif.id, numero_proposition: courante.numero_proposition, niveau: courante.niveau,
+      contenu, controle: courante.controle, parent_id: courante.id, choisie: true, ...extra,
+    }));
+    etapePropositions(d, actif.id);
   };
 
   const carteControle = (v) => {
     const c = v.controle ?? {};
     return h("div", { class: "controle" },
-      (c.verifications ?? []).map((x) => h("div", { class: x.ok ? "ok" : "ko" }, `${x.ok ? "✓" : "⚠"} ${x.controle} — ${x.detail}`)),
-      (c.application ?? []).length ? h("details", {}, h("summary", {}, "Application case par case"),
-        (c.application ?? []).map((a) => h("div", { class: a.applique ? "ok" : "ko" }, `${a.applique ? "✓" : "⚠"} ${a.code}${a.detail ? " — " + a.detail : ""}`))) : null,
+      (c.application ?? []).length ? h("details", {}, h("summary", {}, "Adaptations du PAP appliquées"),
+        c.application.map((a) => h("div", { class: a.applique ? "ok" : "ko" }, `${a.applique ? "✓" : "⚠"} ${a.code}${a.detail ? " — " + a.detail : ""}`))) : null,
       (c.alertes ?? []).map((a) => h("div", { class: "ko" }, `⚠ ${a}`)));
   };
 
   function panneauDroit() {
-    const msg = h("textarea", { placeholder: "Ex. : la question 3 est encore trop longue ; remets le schéma de l’exercice 2…" });
+    const msg = h("textarea", { placeholder: "Ex. : à l’exercice 3, mets les nombres dans un tableau ; agrandis la droite graduée ; ajoute un exemple…" });
     const retenir = h("input", { type: "checkbox" });
     const zone = h("div");
-    const historique = versions.filter((v) => v.document_id === d.id);
+    const autreNiveau = h("select", { style: "width:auto" }, ["forme", "consignes", "fond"].map((n) => h("option", { value: n, selected: n === (courante?.niveau ?? actif.niveau_doc) }, NIVEAUX_ADAPT[n])));
     panneau.replaceChildren(
       h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Propositions"),
-        props.length ? props.map((v) => h("div", { class: `prop ${v.choisie ? "choisie" : ""}`, style: "margin-bottom:.6rem" },
+        racines.map((v) => h("div", { class: `prop ${courante && (courante.id === v.id || courante.numero_proposition === v.numero_proposition) ? "choisie" : ""}`, style: "margin-bottom:.6rem" },
           h("div", { class: "ligne", style: "justify-content:space-between" },
-            h("span", { class: `pastille ${v.niveau}` }, NIVEAUX_ADAPT[v.niveau]),
-            h("span", {}, h("button", { class: "btn discret", onclick: () => montrer(v) }, "Voir"),
-              h("button", { class: "btn sec", onclick: () => choisir(v) }, v.choisie ? "Choisie ✓" : "Choisir"))),
-          h("ul", { class: "doux" }, (v.resume_modifications ?? []).slice(0, 6).map((r) => h("li", {}, r))),
-          carteControle(v))) : h("p", { class: "doux" }, "Aucune proposition. Relancez la génération.")),
+            h("span", {}, h("b", {}, `n° ${v.numero_proposition} `), h("span", { class: `pastille ${v.niveau}` }, NIVEAUX_ADAPT[v.niveau])),
+            h("button", { class: "btn discret", onclick: () => montrer(versions.filter((x) => x.numero_proposition === v.numero_proposition).at(-1)) }, "Voir")),
+          h("ul", { class: "doux", style: "margin:.3rem 0" }, (v.resume_modifications ?? []).slice(0, 5).map((r) => h("li", {}, r))),
+          carteControle(v))),
+        h("div", { class: "ligne", style: "margin-top:.4rem" }, autreNiveau,
+          h("button", { class: "btn sec", onclick: () => etapeGeneration(d, [{ eleve: actif, niveau: autreNiveau.value }], actif.id) }, "Nouvelle proposition"))),
       courante ? h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Ajuster la version affichée"),
-        h("p", { class: "doux" }, `Version du ${dateFr(courante.created_at)} — ${NIVEAUX_ADAPT[courante.niveau]}${courante.auteur === "professeur" ? " — modifiée à la main" : ""}`),
+        h("p", { class: "doux" }, `${dateFr(courante.created_at)} — ${NIVEAUX_ADAPT[courante.niveau]}${courante.auteur === "professeur" ? " — modifiée à la main" : courante.parent_id ? " — ajustée" : ""}`),
         msg, h("label", { class: "ligne", style: "font-weight:normal" }, retenir, "Retenir cette préférence pour mes prochaines adaptations"),
         h("div", { class: "ligne", style: "margin-top:.5rem" },
           h("button", { class: "btn", onclick: () => essai(async () => {
             if (!msg.value.trim()) throw new Error("Écrivez l’ajustement souhaité.");
-            zone.replaceChildren(chargement("Ajustement en cours…"));
+            zone.replaceChildren(chargement("Ajustement en cours… (30 à 90 secondes)"));
             if (retenir.checked) await memoriser(msg.value.trim());
-            const r = await appelMoteur({ action: "ajuster", version_id: courante.id, message: msg.value.trim() });
-            await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", actif.id);
-            await sb.from("versions").update({ choisie: true }).eq("id", r.version.id);
-            etapePropositions(d, actif.id);
+            const r = await appelMoteurRelance({ action: "ajuster", version_id: courante.id, message: msg.value.trim() }, (m) => zone.replaceChildren(chargement(`Service occupé, ${m}…`)));
+            if (!(r.sections ?? []).length) throw new Error((r.alertes ?? []).join(" ") || "Aucune modification proposée.");
+            await sb.from("ajustements").insert({ version_id: courante.id, message: msg.value.trim() }).then(() => {}, () => {});
+            await enregistrer(
+              { format: "html", html: fusionnerSections(courante.contenu.html, r.sections), corrige: fusionnerCorrige(courante.contenu.corrige, r.corrige) },
+              { auteur: "ia", resume_modifications: r.resume_modifications ?? [msg.value.trim()], controle: { ...courante.controle, alertes: [...(courante.controle?.alertes ?? []), ...(r.alertes ?? [])] } });
           }, zone) }, "Demander l’ajustement"),
-          h("button", { class: "btn sec", onclick: () => modeEdition() }, "Modifier à la main")),
+          h("button", { class: "btn sec", onclick: () => montrer(courante, true) }, "Modifier à la main")),
         zone) : null,
-      h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Historique"),
-        historique.slice().reverse().map((v) => h("div", { class: "ligne", style: "justify-content:space-between;border-top:1px solid #EEF1F4;padding:.3rem 0" },
-          h("span", { class: "doux" }, `${dateFr(v.created_at)} · ${NIVEAUX_ADAPT[v.niveau]}${v.auteur === "professeur" ? " · à la main" : v.parent_id ? " · ajustée" : ""}${v.choisie ? " · choisie" : ""}`),
-          h("span", {}, h("button", { class: "btn discret", onclick: () => montrer(v) }, "Voir"), h("button", { class: "btn discret", onclick: () => choisir(v) }, "Revenir"))))),
+      versions.length ? h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Historique"),
+        versions.slice().reverse().map((v) => h("div", { class: "ligne", style: "justify-content:space-between;border-top:1px solid #EEF1F4;padding:.3rem 0" },
+          h("span", { class: "doux" }, `${dateFr(v.created_at)} · n° ${v.numero_proposition} · ${NIVEAUX_ADAPT[v.niveau]}${v.auteur === "professeur" ? " · à la main" : v.parent_id ? " · ajustée" : ""}${v.choisie ? " · retenue" : ""}`),
+          h("span", {}, h("button", { class: "btn discret", onclick: () => montrer(v) }, "Voir"),
+            v.choisie ? null : h("button", { class: "btn discret", onclick: () => essai(async () => {
+              verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", actif.id));
+              verifier(await sb.from("versions").update({ choisie: true }).eq("id", v.id));
+              etapePropositions(d, actif.id);
+            }) }, "Retenir"))))) : null,
       h("button", { class: "btn", onclick: () => etapeExport(d) }, "Passer à l’export →"));
   }
 
-  async function choisir(v) {
-    await essai(async () => {
-      verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", actif.id));
-      verifier(await sb.from("versions").update({ choisie: true }).eq("id", v.id));
-      etapePropositions(d, actif.id);
-    });
-  }
-
-  function modeEdition() {
-    const c = structuredClone(normaliser(courante.contenu));
-    const p = params(courante);
-    const conteneur = h("div", { class: "rendu edition", style: `font-family:${p.police};font-size:${p.taille}pt;line-height:${p.interligne};background:${p.fond};padding:1rem` });
-    conteneur.append(h("div", { contenteditable: "true", "data-edit": "1", style: "font-size:1.3em;font-weight:bold", oninput: (e) => { c.titre = e.target.innerText; } }, c.titre));
-    c.sections.forEach((s) => {
-      conteneur.append(h("h2", { contenteditable: "true", "data-edit": "1", oninput: (e) => { s.titre = e.target.innerText; } }, s.titre ?? ""));
-      (s.blocs ?? []).forEach((b) => {
-        if (b.type === "zone_reponse" || b.type === "saut_page") return conteneur.append(h("div", { class: "doux" }, `[${b.type === "zone_reponse" ? `zone de réponse, ${b.lignes ?? 4} lignes` : "saut de page"}]`));
-        const cle = b.texte != null ? "texte" : b.contenu != null ? "contenu" : b.enonce != null ? "enonce" : "texte";
-        conteneur.append(h("div", { class: "bloc" }, h("span", { class: "pastille" }, b.type),
-          h("div", { contenteditable: "true", "data-edit": "1", style: "white-space:pre-wrap", oninput: (e) => { b[cle] = e.target.innerText; } }, texteBloc(b))));
-        for (const liste of ["propositions", "items", "debuts"]) {
-          if (Array.isArray(b[liste])) b[liste].forEach((it, k) => conteneur.append(h("div", { contenteditable: "true", "data-edit": "1", style: "margin-left:1.5em", oninput: (e) => { b[liste][k] = e.target.innerText; } }, typeof it === "string" ? it : it.texte ?? "")));
-        }
-      });
-    });
+  function panneauEdition() {
     const zone = h("div");
-    feuille.replaceChildren(conteneur);
     panneau.replaceChildren(h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Modification à la main"),
-      h("p", { class: "doux" }, "Cliquez dans le texte pour le modifier. La mise en forme du profil sera réappliquée à l’export."),
+      h("p", { class: "doux" }, "Cliquez dans le document pour corriger un mot, une consigne, une valeur. Les figures se corrigent par une demande d’ajustement."),
       h("div", { class: "ligne" },
         h("button", { class: "btn", onclick: () => essai(async () => {
-          verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", actif.id));
-          verifier(await sb.from("versions").insert({ document_id: d.id, eleve_id: actif.id, numero_proposition: courante.numero_proposition, niveau: courante.niveau, contenu: c, resume_modifications: ["Modifiée à la main par le professeur"], controle: courante.controle, parent_id: courante.id, auteur: "professeur", choisie: true }));
-          etapePropositions(d, actif.id);
+          const racine = cadre?.racine();
+          if (!racine) throw new Error("Aperçu non chargé.");
+          await enregistrer({ format: "html", html: htmlPourStockage(racine), corrige: courante.contenu.corrige ?? [] },
+            { auteur: "professeur", resume_modifications: ["Modifiée à la main par le professeur"] });
         }, zone) }, "Enregistrer mes modifications"),
         h("button", { class: "btn sec", onclick: () => montrer(courante) }, "Annuler")), zone));
   }
 
-  afficher(bandeau(4), h("h2", {}, `Propositions — ${d.titre}`),
+  afficher(bandeau(4), h("h2", {}, `Adaptations — ${d.titre}`),
     h("div", { class: "onglets" }, eleves.map((e) => h("button", { class: e.id === actif.id ? "actif" : "", onclick: () => etapePropositions(d, e.id) }, e.identifiant)),
       h("button", { onclick: () => etapeEleves(d) }, "+ élèves")),
-    versions.length ? h("div", { class: "deux" }, panneau, feuille) : h("div", {}, message("info", "Aucune proposition pour cet élève."),
-      h("button", { class: "btn", onclick: () => etapeGeneration(d, [actif]) }, "Générer maintenant")));
-  if (courante) montrer(courante); else panneauDroit();
+    versions.length ? h("div", { class: "deux" }, panneau, feuille) : h("div", {}, message("info", "Aucune adaptation pour cet élève."),
+      h("button", { class: "btn", onclick: () => etapeGeneration(d, [{ eleve: actif, niveau: actif.niveau_doc ?? "consignes" }], actif.id) }, "Générer maintenant")));
+  if (courante) montrer(courante); else if (versions.length) panneauDroit();
 }
 
 async function memoriser(texte) {
@@ -682,39 +788,54 @@ async function memoriser(texte) {
 }
 
 // Étape 6 : export
+function htmlHydrate(html) {
+  const t = document.createElement("template");
+  t.innerHTML = String(html ?? "");
+  hydraterDom(t.content);
+  const div = document.createElement("div"); div.append(t.content);
+  div.querySelectorAll("[contenteditable]").forEach((x) => x.removeAttribute("contenteditable"));
+  return div.innerHTML;
+}
+
 async function etapeExport(d) {
   afficher(chargement("Préparation des exports…"));
   const liens = verifier(await sb.from("document_eleves").select("eleves(*, profils_eleves(*))").eq("document_id", d.id));
   const eleves = liens.map((l) => l.eleves).filter(Boolean).sort((a, b) => a.identifiant.localeCompare(b.identifiant));
-  const versions = verifier(await sb.from("versions").select("*").eq("document_id", d.id).order("created_at"));
+  const versions = verifier(await sb.from("versions").select("*").eq("document_id", d.id).order("created_at")).filter(estV3);
   const niveauClasse = E.profilsNiveau[d.classes?.niveau];
-  const versionClasse = structureVersContenu(d.structure);
-  const pClasse = parametres([], {}, niveauClasse);
-
-  const versionDe = (e) => versions.filter((v) => v.eleve_id === e.id).find((v) => v.choisie) ?? versions.filter((v) => v.eleve_id === e.id).at(-1);
+  const versionDe = (e) => { const vs = versions.filter((v) => v.eleve_id === e.id); return vs.find((v) => v.choisie) ?? vs.at(-1); };
   const paramsDe = (e) => parametres(e.profils_eleves?.codes ?? [], e.profils_eleves?.preferences ?? {}, niveauClasse);
+  const titre = d.structure?.titre || d.titre;
 
-  const boutons = (contenu, p, identifiant, base) => h("span", { class: "ligne" },
-    h("button", { class: "btn sec", onclick: () => exporterWord(contenu, p, identifiant, base) }, "Word"),
-    h("button", { class: "btn sec", onclick: () => imprimer(contenu, p, identifiant) }, "PDF"),
-    h("button", { class: "btn sec", onclick: () => telecharger(`${base}.html`, pageHtmlAutonome(contenu, p, { identifiant }), "text/html") }, "HTML"),
-    normaliser(contenu).corrige?.length ? h("button", { class: "btn discret", onclick: () => imprimer(contenu, parametres([], {}, null), identifiant, true) }, "Corrigé") : null);
+  const boutons = (v, p, e) => {
+    const base = `${nomFichier(d.titre)}_${nomFichier(e.identifiant)}`;
+    return h("span", { class: "ligne" },
+      h("button", { class: "btn sec", onclick: () => imprimerV3(v.contenu.html, p, `${titre} — ${e.identifiant}`) }, "PDF"),
+      h("button", { class: "btn sec", onclick: () => exporterWordV3(v.contenu.html, p, base) }, "Word"),
+      h("button", { class: "btn sec", onclick: () => telecharger(`${base}.html`, pageAutonomeV3(htmlHydrate(v.contenu.html), p, titre), "text/html") }, "HTML"),
+      (v.contenu.corrige ?? []).length ? h("button", { class: "btn discret", onclick: () => imprimerCorrige(v.contenu, titre, e.identifiant) }, "Corrigé") : null);
+  };
+  const original = async () => essai(async () => {
+    const { data, error } = await sb.storage.from("documents").createSignedUrl(d.fichier_path, 600);
+    if (error) throw new Error("Original introuvable.");
+    window.open(data.signedUrl, "_blank");
+  });
 
   afficher(bandeau(5), h("h2", {}, `Exporter — ${d.titre}`),
-    message("info", "PDF : choisissez « Enregistrer au format PDF » dans la fenêtre d’impression. HTML : version interactive (lecture vocale, règle de lecture, pas à pas selon le profil)."),
+    message("info", "PDF : choisissez « Enregistrer au format PDF » dans la fenêtre d’impression (marges gérées par l’outil). HTML : version interactive (lecture vocale, règle de lecture, pas à pas selon le profil). Word : version modifiable."),
     h("div", { class: "carte" }, h("table", { class: "liste" },
       h("tr", {}, h("th", {}, "Version"), h("th", {}, "Niveau"), h("th", {}, "Exports")),
-      h("tr", {}, h("td", {}, h("b", {}, "Version classe")), h("td", {}, "Originale"), h("td", {}, boutons(versionClasse, pClasse, "", nomFichier(d.titre) + "_classe"))),
+      h("tr", {}, h("td", {}, h("b", {}, "Version classe")), h("td", {}, "Originale"), h("td", {}, h("button", { class: "btn sec", onclick: original }, "Ouvrir l’original"))),
       eleves.map((e) => {
         const v = versionDe(e);
         return h("tr", {}, h("td", {}, h("b", {}, e.identifiant)), h("td", {}, v ? NIVEAUX_ADAPT[v.niveau] : "—"),
-          h("td", {}, v ? boutons(v.contenu, paramsDe(e), e.identifiant, `${nomFichier(d.titre)}_${nomFichier(e.identifiant)}`) : "Aucune version"));
+          h("td", {}, v ? boutons(v, paramsDe(e), e) : "Aucune version"));
       }))),
     h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Page de garde professeur"),
       h("p", { class: "doux" }, "Aménagements hors document (temps majoré, lecture des consignes, placement…) pour chaque élève. À ne pas distribuer."),
       h("button", { class: "btn", onclick: () => pageDeGarde(d, eleves, versionDe) }, "Imprimer la page de garde")),
     h("div", { class: "ligne" },
-      h("button", { class: "btn discret", onclick: () => etapePropositions(d) }, "← Propositions"),
+      h("button", { class: "btn discret", onclick: () => etapePropositions(d) }, "← Adaptations"),
       h("button", { class: "btn sec", onclick: () => essai(async () => { verifier(await sb.from("documents").update({ statut: "termine" }).eq("id", d.id)); vueDocuments(); }) }, "Marquer comme terminé")));
 }
 
@@ -732,37 +853,45 @@ async function svgVersPng(svg) {
   return { data: new Uint8Array(await blob.arrayBuffer()), largeur: img.width, hauteur: img.height };
 }
 
-async function exporterWord(contenu, p, identifiant, base) {
+async function exporterWordV3(html, p, base) {
   await essai(async () => {
     const docx = await import("https://esm.sh/docx@9.5.1");
+    const racine = document.createElement("div");
+    racine.innerHTML = html;
     const images = new Map();
-    for (const f of figuresDe(contenu)) images.set(f, await svgVersPng(svgFigure(f)));
-    const doc = docxDepuisContenu(docx, contenu, p, { identifiant, images });
-    telecharger(`${base}.docx`, await docx.Packer.toBlob(doc));
+    for (const el of racine.querySelectorAll(".figure[data-fig]")) {
+      try { images.set(el, await svgVersPng(svgFigure(JSON.parse(el.getAttribute("data-fig"))))); } catch { /* figure illisible */ }
+    }
+    telecharger(`${base}.docx`, await docx.Packer.toBlob(docxDepuisDom(docx, racine, p, images)));
   });
 }
 
-function imprimer(contenu, p, identifiant, corrige = false) {
+function fenetreImpression(titre, css, corps) {
   const w = window.open("", "_blank");
   if (!w) return alert("Autorisez les fenêtres pour cette page afin d’imprimer.");
-  w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${echapper(normaliser(contenu).titre)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;600&display=swap" rel="stylesheet">
-<link href="https://fonts.cdnfonts.com/css/opendyslexic" rel="stylesheet">
-<style>body{margin:0}${cssRendu(p)}</style></head><body>${pourImpression(corrige ? rendreCorrigeHtml(contenu, p, { identifiant }) : rendreHtml(contenu, p, { identifiant }), p)}
-<script>document.fonts.ready.then(()=>setTimeout(()=>print(),300))<\/script></body></html>`);
+  w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${echapper(titre)}</title>${LIENS_POLICES}
+<style>body{margin:0}${css}</style></head><body>${corps}
+<script>document.fonts.ready.then(()=>setTimeout(()=>print(),400))<\/script></body></html>`);
   w.document.close();
+}
+function imprimerV3(html, p, titre) {
+  fenetreImpression(titre, cssCharte(p), pourImpression(`<div class="sujet">${htmlHydrate(html)}</div>`, p));
+}
+function imprimerCorrige(contenu, titre, identifiant) {
+  const p = parametres([], {}, null);
+  fenetreImpression(`Corrigé — ${titre}`, cssCharte(p), pourImpression(corrigeHtml(contenu, titre, identifiant), p));
 }
 
 function pageDeGarde(d, eleves, versionDe) {
   const duree = d.structure?.duree_minutes;
   const blocs = eleves.map((e) => {
     const v = versionDe(e);
-    const hd = v?.controle?.hors_document ?? [];
-    const codes = new Set(e.profils_eleves?.codes ?? []);
+    const hd = v?.controle?.hors_document ?? horsDocument(e.profils_eleves?.codes);
+    const codes = e.profils_eleves?.codes ?? [];
     const lignes = hd.map((a) => `<li><b>${echapper(a.code)} · ${echapper(a.libelle)}</b>${a.code === "H1" && duree ? ` — <b>${echapper(tiersTemps(duree))}</b> au lieu de ${echapper(duree)} min` : ""}<br><span style="color:#555">${echapper(a.regles)}</span></li>`).join("");
     return `<div style="border:1px solid #bbb;border-radius:8px;padding:.6em 1em;margin:.8em 0;break-inside:avoid">
 <h3 style="margin:.2em 0">${echapper(e.identifiant)} <span style="font-weight:normal;color:#666">— ${v ? echapper(NIVEAUX_ADAPT[v.niveau]) : "pas de version"}</span></h3>
-<p style="margin:.3em 0;color:#555">Adaptations du profil : ${echapper([...codes].join(" ") || "aucune")}</p>
+<p style="margin:.3em 0;color:#555">Adaptations du profil : ${echapper(codes.join(" ") || "aucune")}</p>
 ${lignes ? `<ul>${lignes}</ul>` : "<p>Aucun aménagement hors document.</p>"}</div>`;
   }).join("");
   const w = window.open("", "_blank");
@@ -790,8 +919,8 @@ async function vueEtablissement() {
   const c = conso.data?.[0] ?? { nb_operations: 0, cout_eur: 0, plafond_eur: etab.data?.plafond_mensuel_eur };
   const champCle = h("input", { type: "password", autocomplete: "off", placeholder: "sk-ant-…" });
   const plafond = h("input", { type: "number", min: 0, step: 1, value: etab.data?.plafond_mensuel_eur ?? 30 });
-  const modele = h("select", {}, [["claude-sonnet-5-5", "Claude Sonnet 5.5 (recommandé)"], ["claude-opus-5-5", "Claude Opus 5.5 (plus précis, plus cher)"], ["claude-haiku-5-5", "Claude Haiku 5.5 (économique)"]]
-    .map(([v, t]) => h("option", { value: v, selected: (etab.data?.modele_ia ?? "claude-sonnet-5-5") === v }, t)));
+  const modele = h("select", {}, [["claude-opus-5-5", "Claude Opus 5.5 (recommandé : meilleure qualité)"], ["claude-sonnet-5-5", "Claude Sonnet 5.5 (moins cher, moins fidèle)"], ["claude-haiku-5-5", "Claude Haiku 5.5 (économique)"]]
+    .map(([v, t]) => h("option", { value: v, selected: (etab.data?.modele_ia ?? "claude-opus-5-5") === v }, t)));
   const email = h("input", { type: "email", placeholder: "collegue@exemple.fr" });
   const role = h("select", {}, h("option", { value: "professeur" }, "Professeur"), h("option", { value: "referent" }, "Référent"));
   const z1 = h("div"), z2 = h("div"), z3 = h("div");
