@@ -541,10 +541,10 @@ export function cssCharte(p) {
 .sujet .encadre{background:rgba(31,78,140,.08);border-radius:4px;padding:.35em .8em;margin:.35em 0}
 .sujet .donnees{display:flex;flex-wrap:wrap;gap:.3em 1.6em;font-weight:bold;margin:.35em 0}
 .sujet .donnees span.i{font-weight:normal}
-.sujet table.rep{border-collapse:collapse;margin:.3em 0}
-.sujet table.rep th,.sujet table.rep td{border:1px solid #333;padding:.15em .7em;text-align:center;min-width:3em}
+.sujet table.rep{border-collapse:collapse;margin:.3em 0;max-width:100%}
+.sujet table.rep th,.sujet table.rep td{border:1px solid #333;padding:.15em .45em;text-align:center;min-width:1.6em;overflow-wrap:anywhere}
 .sujet table.rep th{background:rgba(31,78,140,.08)}
-.sujet table.rep td.v{height:${p.grandesZones ? "2.6em" : "1.9em"};min-width:5em}
+.sujet table.rep td.v{height:${p.grandesZones ? "2.6em" : "1.9em"};min-width:2.4em}
 .sujet .case{font-size:1.15em}
 .sujet .grille{display:grid;gap:.25em 1.4em;margin:.35em 0}
 .sujet .g2{grid-template-columns:1fr 1fr}.sujet .g3{grid-template-columns:1fr 1fr 1fr}
