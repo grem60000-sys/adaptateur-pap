@@ -6,7 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   FONDS, POLICES, parametres, tiersTemps, echapper, svgFigure, pourImpression,
   cssCharte, hydraterDom, htmlPourStockage, corrigeHtml, pageAutonomeV3, docxDepuisDom,
-} from "./rendu.js?v=2026112002";
+} from "./rendu.js?v=2026112003";
 
 const SUPA_URL = "https://mfykdfytbnajxfnkjhwz.supabase.co";
 const SUPA_CLE = "sb_publishable_B7kioKokXxrUihZ3FBofYQ_T49C21eO";
@@ -950,6 +950,12 @@ async function exporterWordV3(html, p, base) {
     const images = new Map();
     for (const el of racine.querySelectorAll(".figure[data-fig]")) {
       try { images.set(el, await svgVersPng(svgFigure(JSON.parse(el.getAttribute("data-fig"))))); } catch { /* figure illisible */ }
+    }
+    for (const el of racine.querySelectorAll(".figure-svg")) {
+      const svg = el.querySelector("svg");
+      if (!svg) continue;
+      if (!svg.getAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      try { images.set(el, await svgVersPng(svg.outerHTML)); } catch { /* figure illisible */ }
     }
     telecharger(`${base}.docx`, await docx.Packer.toBlob(docxDepuisDom(docx, racine, p, images)));
   });

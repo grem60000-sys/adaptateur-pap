@@ -550,6 +550,7 @@ export function cssCharte(p) {
 .sujet .g2{grid-template-columns:1fr 1fr}.sujet .g3{grid-template-columns:1fr 1fr 1fr}
 .sujet .deux-col{display:grid;grid-template-columns:auto 1fr;gap:1.2em;align-items:start}
 .sujet .figure svg{display:block;max-width:100%;height:auto}
+.sujet .figure-svg{margin:.4em 0;break-inside:avoid}.sujet .figure-svg svg{display:block;max-width:100%;height:auto;margin:0 auto}.sujet .figure-svg .fig-titre{text-align:center}
 .sujet .fig-titre{font-weight:bold;font-size:.85em;margin-top:.3em}
 .sujet .figure-originale{border:2px dashed #C26A12;padding:.5em;color:#7A4A00;font-style:italic}
 .sujet .etape{margin:.3em 0 .3em .2em}
@@ -558,7 +559,7 @@ export function cssCharte(p) {
 .sujet .check{border:1.5px dashed ${BLEU};border-radius:4px;padding:.25em .8em;margin:.4em 0;font-size:.92em}
 .sujet .lignes .l{border-bottom:1px dotted #666;height:${p.grandesZones ? "1.4cm" : "0.95cm"}}
 .sujet table,.sujet .figure,.sujet .encadre,.sujet .grille,.sujet .deux-col,.sujet .check,.sujet p,.sujet .etape{break-inside:avoid}
-.sujet p:has(+ .figure),.sujet .figure,.sujet p:has(+ .lignes),.sujet p:has(+ .reponse){break-after:avoid}
+.sujet p:has(+ .figure),.sujet .figure,.sujet p:has(+ .figure-svg),.sujet p:has(+ .lignes),.sujet p:has(+ .reponse){break-after:avoid}
 .sujet[contenteditable=true]{outline:2px dashed #2F6FB0;outline-offset:4px}
 .corrige-doc{font-family:Arial,sans-serif;font-size:10.5pt;line-height:1.3;color:#111;background:#fff;padding:0 1.6cm}
 .corrige-doc h2{color:${BLEU};text-align:center}
@@ -599,6 +600,7 @@ export function hydraterDom(racine) {
     el.innerHTML = `${f.titre ? `<div class="fig-titre">${echapper(f.titre)}</div>` : ""}${svgFigure(f)}`;
     el.setAttribute("contenteditable", "false");
   });
+  racine.querySelectorAll(".figure-svg").forEach((el) => el.setAttribute("contenteditable", "false"));
   racine.querySelectorAll(".lignes[data-n]").forEach((el) => {
     el.innerHTML = '<div class="l"></div>'.repeat(Math.max(1, Math.min(12, +el.getAttribute("data-n"))));
     el.setAttribute("contenteditable", "false");
@@ -609,6 +611,7 @@ export function hydraterDom(racine) {
 export function htmlPourStockage(racine) {
   const c = racine.cloneNode(true);
   c.querySelectorAll(".figure[data-fig],.lignes[data-n]").forEach((el) => { el.innerHTML = ""; el.removeAttribute("contenteditable"); });
+  c.querySelectorAll(".figure-svg").forEach((el) => el.removeAttribute("contenteditable"));
   return c.innerHTML;
 }
 
@@ -695,6 +698,12 @@ export function docxDepuisDom(docx, racine, p, images = new Map()) {
     if (tag === "h1") return enfants.push(para(runsDe(el, { bold: true, size: taille + 8, color: "1F4E8C" }), { alignment: AlignmentType.CENTER }));
     if (cl.contains("entete")) { const [a, b] = el.children; return enfants.push(para([...runsDe(a ?? el), new TextRun({ text: "\t" }), ...(b ? runsDe(b) : [])], { tabStops: [{ type: TabStopType.RIGHT, position: 9600 }] })); }
     if (cl.contains("figure")) return figure(el);
+    if (cl.contains("figure-svg")) {
+      const img = images.get(el), t = el.querySelector(".fig-titre")?.textContent?.trim();
+      if (img) { const e = Math.min(1, 620 / img.largeur); enfants.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ type: "png", data: img.data, transformation: { width: Math.round(img.largeur * e), height: Math.round(img.hauteur * e) } })], spacing: { after: 40 } })); }
+      if (t) enfants.push(para([new TextRun({ text: t, bold: true, font: police, size: Math.max(taille - 4, 18) })], { alignment: AlignmentType.CENTER }));
+      return;
+    }
     if (cl.contains("lignes")) { const n = +(el.getAttribute("data-n") || el.children.length || 2); for (let k = 0; k < n; k++) enfants.push(new Paragraph({ children: [new TextRun({ text: " " })], spacing: { line: p.grandesZones ? 700 : 460 }, border: { bottom: { style: BorderStyle.DOTTED, size: 6, color: "666666", space: 1 } } })); return; }
     if (cl.contains("lexique") || cl.contains("encadre") || cl.contains("check")) {
       const sh = cl.contains("check") ? {} : { shading: { type: ShadingType.CLEAR, fill } };
