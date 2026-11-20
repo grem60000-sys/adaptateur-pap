@@ -6,7 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   FONDS, POLICES, parametres, tiersTemps, echapper, svgFigure, pourImpression,
   cssCharte, hydraterDom, htmlPourStockage, corrigeHtml, pageAutonomeV3, docxDepuisDom,
-} from "./rendu.js?v=2026112003";
+} from "./rendu.js?v=2026112004";
 
 const SUPA_URL = "https://mfykdfytbnajxfnkjhwz.supabase.co";
 const SUPA_CLE = "sb_publishable_B7kioKokXxrUihZ3FBofYQ_T49C21eO";
@@ -616,6 +616,33 @@ function horsDocument(codes) {
   return (codes ?? []).map((c) => parCode.get(c)).filter((a) => a?.niveau === "hors_document").map((a) => ({ code: a.code, libelle: a.libelle, regles: a.regles }));
 }
 
+/** Remplace les cahiers des charges de figures par les figures dessinées (appel dédié, plus soigné). */
+async function dessinerFigures(html, d, eleveId, niveau, file = limiteur(3), surProgres = () => {}) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const blocs = [...t.content.querySelectorAll(".figure-a-dessiner")];
+  if (!blocs.length) return { html, alertes: [] };
+  const alertes = []; let faits = 0;
+  surProgres(`dessin des figures 0 / ${blocs.length}`);
+  await Promise.all(blocs.map((el) => file(async () => {
+    const cahier = el.textContent.replace(/\s+/g, " ").trim();
+    try {
+      const r = await appelMoteurRelance({ action: "dessiner_figure", document_id: d.id, eleve_id: eleveId, niveau, cahier,
+        contexte: el.closest("section")?.textContent?.replace(/\s+/g, " ").slice(0, 6000) });
+      const div = document.createElement("div"); div.className = "figure-svg"; div.innerHTML = r.svg;
+      if (r.titre) { const ti = document.createElement("div"); ti.className = "fig-titre"; ti.textContent = r.titre; div.append(ti); }
+      el.replaceWith(div);
+      alertes.push(...(r.alertes ?? []));
+    } catch (e) {
+      const div = document.createElement("div"); div.className = "figure-originale"; div.textContent = cahier; el.replaceWith(div);
+      alertes.push(`Figure non redessinée (${e.message}) : insérez-la depuis l’original ou redemandez-la par un ajustement.`);
+    }
+    faits++; surProgres(`dessin des figures ${faits} / ${blocs.length}`);
+  })));
+  const div = document.createElement("div"); div.append(t.content);
+  return { html: div.innerHTML, alertes };
+}
+
 async function genererPourEleve(d, eleve, niveau, file, surProgres) {
   const groupes = groupesExercices(d.structure?.exercices ?? []);
   if (!groupes.length) throw new Error("Aucun exercice dans la lecture validée.");
@@ -635,14 +662,15 @@ async function genererPourEleve(d, eleve, niveau, file, surProgres) {
     const x = application.get(a.code);
     application.set(a.code, x ? { ...x, applique: x.applique || a.applique, detail: [x.detail, a.detail].filter(Boolean).join(" ; ") } : a);
   });
-  const contenu = { format: "html", html: parties.map((p) => p.html).join("\n"), corrige: parties.flatMap((p) => p.corrige ?? []) };
+  const figures = await dessinerFigures(parties.map((p) => p.html).join("\n"), d, eleve.id, niveau, file, surProgres);
+  const contenu = { format: "html", html: figures.html, corrige: parties.flatMap((p) => p.corrige ?? []) };
   const precedentes = verifier(await sb.from("versions").select("id, parent_id").eq("document_id", d.id).eq("eleve_id", eleve.id));
   verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", eleve.id));
   return verifier(await sb.from("versions").insert({
     document_id: d.id, eleve_id: eleve.id, niveau, contenu,
     numero_proposition: precedentes.filter((v) => !v.parent_id).length + 1,
     resume_modifications: parties.flatMap((p) => p.resume_modifications ?? []),
-    controle: { application: [...application.values()], alertes: parties.flatMap((p) => p.alertes ?? []), hors_document: horsDocument(eleve.profils_eleves?.codes) },
+    controle: { application: [...application.values()], alertes: [...parties.flatMap((p) => p.alertes ?? []), ...figures.alertes], hors_document: horsDocument(eleve.profils_eleves?.codes) },
     auteur: "ia", choisie: true,
   }).select().single());
 }
@@ -819,6 +847,10 @@ async function etapePropositions(d, eleveActif) {
             if (retenir.checked) await memoriser(msg.value.trim());
             const r = await appelMoteurRelance({ action: "ajuster", version_id: courante.id, message: msg.value.trim() }, (m) => zone.replaceChildren(chargement(`Service occupé, ${m}…`)));
             if (!(r.sections ?? []).length) throw new Error((r.alertes ?? []).join(" ") || "Aucune modification proposée.");
+            zone.replaceChildren(chargement("Dessin des figures modifiées…"));
+            const figAlertes = [];
+            for (const sec of r.sections) { const f = await dessinerFigures(sec.html, d, actif.id, courante.niveau); sec.html = f.html; figAlertes.push(...f.alertes); }
+            r.alertes = [...(r.alertes ?? []), ...figAlertes];
             await sb.from("ajustements").insert({ version_id: courante.id, message: msg.value.trim() }).then(() => {}, () => {});
             await enregistrer(
               { format: "html", html: fusionnerSections(courante.contenu.html, r.sections), corrige: fusionnerCorrige(courante.contenu.corrige, r.corrige) },

@@ -552,6 +552,7 @@ export function cssCharte(p) {
 .sujet .figure svg{display:block;max-width:100%;height:auto}
 .sujet .figure-svg{margin:.4em 0;break-inside:avoid}.sujet .figure-svg svg{display:block;max-width:100%;height:auto;margin:0 auto}.sujet .figure-svg .fig-titre{text-align:center}
 .sujet .fig-titre{font-weight:bold;font-size:.85em;margin-top:.3em}
+.sujet .figure-a-dessiner{border:2px dashed #2F6FB0;padding:.5em;color:#1F4E8C;font-style:italic}
 .sujet .figure-originale{border:2px dashed #C26A12;padding:.5em;color:#7A4A00;font-style:italic}
 .sujet .etape{margin:.3em 0 .3em .2em}
 .sujet .etape b.n{color:${BLEU}}
