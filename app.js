@@ -6,7 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   FONDS, POLICES, parametres, tiersTemps, echapper, svgFigure, pourImpression,
   cssCharte, hydraterDom, htmlPourStockage, corrigeHtml, pageAutonomeV3, docxDepuisDom,
-} from "./rendu.js?v=2026112001";
+} from "./rendu.js?v=2026112002";
 
 const SUPA_URL = "https://mfykdfytbnajxfnkjhwz.supabase.co";
 const SUPA_CLE = "sb_publishable_B7kioKokXxrUihZ3FBofYQ_T49C21eO";

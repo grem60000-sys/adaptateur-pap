@@ -542,7 +542,7 @@ export function cssCharte(p) {
 .sujet .donnees{display:flex;flex-wrap:wrap;gap:.3em 1.6em;font-weight:bold;margin:.35em 0}
 .sujet .donnees span.i{font-weight:normal}
 .sujet table.rep{border-collapse:collapse;margin:.3em 0;max-width:100%}
-.sujet table.rep th,.sujet table.rep td{border:1px solid #333;padding:.15em .45em;text-align:center;min-width:1.6em;overflow-wrap:anywhere}
+.sujet table.rep th,.sujet table.rep td{border:1px solid #333;padding:.15em .45em;text-align:center;min-width:1.6em;hyphens:manual;word-break:normal;overflow-wrap:normal}
 .sujet table.rep th{background:rgba(31,78,140,.08)}
 .sujet table.rep td.v{height:${p.grandesZones ? "2.6em" : "1.9em"};min-width:2.4em}
 .sujet .case{font-size:1.15em}
@@ -558,7 +558,7 @@ export function cssCharte(p) {
 .sujet .check{border:1.5px dashed ${BLEU};border-radius:4px;padding:.25em .8em;margin:.4em 0;font-size:.92em}
 .sujet .lignes .l{border-bottom:1px dotted #666;height:${p.grandesZones ? "1.4cm" : "0.95cm"}}
 .sujet table,.sujet .figure,.sujet .encadre,.sujet .grille,.sujet .deux-col,.sujet .check,.sujet p,.sujet .etape{break-inside:avoid}
-.sujet p:has(+ .figure),.sujet .figure{break-after:avoid}
+.sujet p:has(+ .figure),.sujet .figure,.sujet p:has(+ .lignes),.sujet p:has(+ .reponse){break-after:avoid}
 .sujet[contenteditable=true]{outline:2px dashed #2F6FB0;outline-offset:4px}
 .corrige-doc{font-family:Arial,sans-serif;font-size:10.5pt;line-height:1.3;color:#111;background:#fff;padding:0 1.6cm}
 .corrige-doc h2{color:${BLEU};text-align:center}
