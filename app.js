@@ -135,13 +135,13 @@ async function demarrer() {
   await sb.rpc("accepter_invitations");
   const [admin, membres, ref, pre, niv] = await Promise.all([
     sb.rpc("est_admin_plateforme"),
-    sb.from("membres").select("role, etablissement_id, etablissements(id, nom)").eq("user_id", E.user.id),
+    sb.from("membres").select("role, etablissement_id, etablissements(id, nom, niveau_qualite)").eq("user_id", E.user.id),
     sb.from("referentiel_adaptations").select("*").eq("actif", true).order("ordre"),
     sb.from("prereglages").select("*").order("ordre"),
     sb.from("profils_niveau").select("*"),
   ]);
   E.admin = !!admin.data;
-  E.etabs = (membres.data ?? []).map((m) => ({ id: m.etablissement_id, nom: m.etablissements?.nom, role: m.role }));
+  E.etabs = (membres.data ?? []).map((m) => ({ id: m.etablissement_id, nom: m.etablissements?.nom, role: m.role, qualite: m.etablissements?.niveau_qualite }));
   E.referentiel = ref.data ?? [];
   E.prereglages = pre.data ?? [];
   E.profilsNiveau = Object.fromEntries((niv.data ?? []).map((n) => [n.niveau, n]));
@@ -214,7 +214,8 @@ async function vueClasses() {
       h("h3", { style: "margin-top:0" }, c.nom),
       h("p", { class: "doux" }, `${NIVEAUX_CLASSE.find((n) => n[0] === c.niveau)?.[1]} · ${c.matiere} · ${c.annee_scolaire}`),
       h("p", {}, `${c.eleves?.[0]?.count ?? 0} élève(s) avec un PAP`),
-      h("button", { class: "btn", onclick: () => vueClasse(c) }, "Ouvrir")))) : h("p", { class: "vide" }, "Aucune classe pour l’instant."),
+      h("div", { class: "ligne" }, h("button", { class: "btn", onclick: () => vueClasse(c) }, "Ouvrir"),
+        h("button", { class: "btn discret", onclick: () => supprimerClasse(c, vueClasses) }, "Supprimer"))))) : h("p", { class: "vide" }, "Aucune classe pour l’instant."),
     h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Nouvelle classe"),
       h("div", { class: "grille" }, h("div", {}, h("label", {}, "Nom"), nom), h("div", {}, h("label", {}, "Niveau"), niveau), h("div", {}, h("label", {}, "Matière"), matiere)),
       h("button", { class: "btn", style: "margin-top:1rem", onclick: () => essai(async () => {
@@ -224,13 +225,24 @@ async function vueClasses() {
       }, zone) }, "Créer la classe"), zone));
 }
 
+async function supprimerClasse(c, ensuite) {
+  await essai(async () => {
+    const { count } = await sb.from("eleves").select("id", { count: "exact", head: true }).eq("classe_id", c.id);
+    if (!confirm(`Supprimer la classe « ${c.nom} » ?\n\nSeront supprimés : ${count ?? 0} élève(s), leurs profils PAP et toutes leurs adaptations.\nLes documents déposés sont conservés (supprimables dans « Évaluations et cours »).\n\nCette suppression est définitive.`)) return;
+    verifier(await sb.from("classes").delete().eq("id", c.id));
+    ensuite();
+  });
+}
+
 async function vueClasse(c) {
   afficher(chargement("Chargement…"));
   const eleves = verifier(await sb.from("eleves").select("*, profils_eleves(*)").eq("classe_id", c.id).order("identifiant"));
   const ident = h("input", { placeholder: "Ex. : TSTMG-A3", maxlength: 30 });
   const zone = h("div");
   afficher(
-    h("button", { class: "btn discret", onclick: vueClasses }, "← Mes classes"),
+    h("div", { class: "ligne", style: "justify-content:space-between" },
+      h("button", { class: "btn discret", onclick: vueClasses }, "← Mes classes"),
+      h("button", { class: "btn discret", onclick: () => supprimerClasse(c, vueClasses) }, "Supprimer la classe")),
     h("h2", {}, c.nom),
     message("info", "Chaque élève est enregistré sous un identifiant. N’utilisez jamais son nom ni ses initiales. Gardez la correspondance sur papier ou dans votre propre fichier."),
     h("div", { class: "carte" },
@@ -244,7 +256,7 @@ async function vueClasse(c) {
             h("td", {}, NIVEAUX_ADAPT[p.niveau_max ?? "fond"]),
             h("td", {}, h("button", { class: "btn sec", onclick: () => vueProfil(c, e) }, "Profil PAP"), " ",
               h("button", { class: "btn discret", onclick: () => essai(async () => {
-                if (!confirm(`Supprimer l’élève ${e.identifiant} et son profil ?`)) return;
+                if (!confirm(`Supprimer l’élève ${e.identifiant}, son profil PAP et toutes ses adaptations ?\n\nCette suppression est définitive.`)) return;
                 verifier(await sb.from("eleves").delete().eq("id", e.id)); vueClasse(c);
               }) }, "Supprimer")));
         })) : h("p", { class: "vide" }, "Aucun élève pour l’instant."),
@@ -350,6 +362,8 @@ const estV3 = (v) => v?.contenu?.format === "html";
 
 async function vueDocuments() {
   afficher(chargement("Chargement des documents…"));
+  const attente = await verifierLots();
+  const enPrep = new Map(); attente.forEach((l) => enPrep.set(l.document_id, (enPrep.get(l.document_id) ?? 0) + 1));
   const docs = verifier(await sb.from("documents").select("id, titre, type, statut, created_at, classes(nom)").eq("etablissement_id", E.etab.id).order("created_at", { ascending: false }));
   const statuts = { depose: "Déposé", lu: "À vérifier", structure_validee: "Lecture validée", en_adaptation: "En adaptation", termine: "Terminé" };
   afficher(
@@ -358,9 +372,21 @@ async function vueDocuments() {
     docs.length ? h("div", { class: "carte" }, h("table", { class: "liste" },
       h("tr", {}, h("th", {}, "Titre"), h("th", {}, "Type"), h("th", {}, "Classe"), h("th", {}, "État"), h("th", {}, "Créé le"), h("th", {}, "")),
       docs.map((d) => h("tr", {}, h("td", {}, h("b", {}, d.titre)), h("td", {}, d.type === "cours" ? "Cours" : "Évaluation"),
-        h("td", {}, d.classes?.nom ?? "—"), h("td", {}, statuts[d.statut]), h("td", {}, dateFr(d.created_at)),
-        h("td", {}, h("button", { class: "btn sec", onclick: () => reprendre(d.id) }, "Ouvrir")))))) :
+        h("td", {}, d.classes?.nom ?? "—"), h("td", {}, enPrep.get(d.id) ? `En préparation (${enPrep.get(d.id)} élève${enPrep.get(d.id) > 1 ? "s" : ""})` : statuts[d.statut]), h("td", {}, dateFr(d.created_at)),
+        h("td", {}, h("span", { class: "ligne" }, h("button", { class: "btn sec", onclick: () => reprendre(d.id) }, "Ouvrir"),
+          h("button", { class: "btn discret", onclick: () => supprimerDocument(d, vueDocuments) }, "Supprimer"))))))) :
       h("p", { class: "vide" }, "Aucun document. Commencez par déposer une évaluation ou un cours."));
+}
+
+async function supprimerDocument(d, ensuite) {
+  await essai(async () => {
+    if (!confirm(`Supprimer « ${d.titre} » ?\n\nSeront supprimés : le fichier original, la lecture, toutes les adaptations des élèves et leur historique.\n\nCette suppression est définitive.`)) return;
+    const dossier = `${E.user.id}/${d.id}`;
+    const { data: fichiers } = await sb.storage.from("documents").list(dossier);
+    if (fichiers?.length) verifier(await sb.storage.from("documents").remove(fichiers.map((f) => `${dossier}/${f.name}`)));
+    verifier(await sb.from("documents").delete().eq("id", d.id));
+    ensuite();
+  });
 }
 
 async function chargerDoc(id) { return verifier(await sb.from("documents").select("*, classes(*)").eq("id", id).single()); }
@@ -513,6 +539,8 @@ async function etapeVerification(d) {
 
 // Étape 3 : élèves concernés
 async function etapeEleves(d) {
+  if (!d.classe_id) return afficher(bandeau(2), message("err", "La classe de ce document a été supprimée. Déposez le document à nouveau pour une autre classe, ou supprimez-le."),
+    h("button", { class: "btn discret", onclick: () => supprimerDocument(d, vueDocuments) }, "Supprimer ce document"));
   afficher(chargement("Chargement des élèves…"));
   const eleves = verifier(await sb.from("eleves").select("*, profils_eleves(*)").eq("classe_id", d.classe_id).order("identifiant"));
   const deja = verifier(await sb.from("document_eleves").select("*").eq("document_id", d.id));
@@ -534,12 +562,20 @@ async function etapeEleves(d) {
           h("td", {}, sel));
       }))),
     h("p", { class: "doux" }, "Forme seule : mêmes mots, présentation adaptée. Forme + consignes : consignes reformulées et découpées. Forme + fond : allègements prévus par le PAP (compétences conservées)."),
-    h("button", { class: "btn", onclick: () => essai(async () => {
+    h("div", { class: "ligne" },
+      h("button", { class: "btn", onclick: () => lancerGeneration(false) }, "Générer maintenant"),
+      h("button", { class: "btn sec", onclick: () => lancerGeneration(true) }, "Mode économique : prêt dans l’heure, moitié prix")),
+    h("p", { class: "doux" }, "Le mode économique produit exactement le même document. Il est traité en différé : vous pouvez fermer la page et revenir plus tard (en général moins d’une heure, 24 h au maximum)."),
+    zone);
+  function lancerGeneration(differe) {
+    return essai(async () => {
       if (!choix.size) throw new Error("Cochez au moins un élève.");
       verifier(await sb.from("document_eleves").delete().eq("document_id", d.id));
       verifier(await sb.from("document_eleves").insert([...choix].map(([eleve_id, niveau_max]) => ({ document_id: d.id, eleve_id, niveau_max }))));
-      etapeGeneration(d, eleves.filter((e) => choix.has(e.id)).map((e) => ({ eleve: e, niveau: choix.get(e.id) })));
-    }, zone) }, "Générer les adaptations"), zone);
+      const demandes = eleves.filter((e) => choix.has(e.id)).map((e) => ({ eleve: e, niveau: choix.get(e.id) }));
+      differe ? etapeDiffere(d, demandes) : etapeGeneration(d, demandes);
+    }, zone);
+  }
 }
 
 // Étape 4 : génération (exercices par groupes, appels en parallèle)
@@ -564,10 +600,12 @@ async function appelMoteurRelance(corps, surAttente) {
   }
 }
 function groupesExercices(exos) {
+  // Parties plus grosses = moins de relectures de l'original. Plus petites en qualité maximale (réflexion plus longue).
+  const max = E.etab?.qualite === "maximale" ? 3 : 4;
   const g = []; let cur = [], poids = 0;
   for (const e of exos) {
     const w = e.figures ? 2 : 1;
-    if (cur.length && poids + w > 2) { g.push(cur); cur = []; poids = 0; }
+    if (cur.length && poids + w > max) { g.push(cur); cur = []; poids = 0; }
     cur.push(String(e.numero)); poids += w;
   }
   if (cur.length) g.push(cur);
@@ -583,12 +621,15 @@ async function genererPourEleve(d, eleve, niveau, file, surProgres) {
   if (!groupes.length) throw new Error("Aucun exercice dans la lecture validée.");
   let faits = 0;
   surProgres(`0 / ${groupes.length} parties`);
-  const parties = await Promise.all(groupes.map((exercices, i) => file(async () => {
-    const r = await appelMoteurRelance({ action: "adapter_partie", document_id: d.id, eleve_id: eleve.id, niveau, exercices, premiere: i === 0 },
+  const lancer = (i) => file(async () => {
+    const r = await appelMoteurRelance({ action: "adapter_partie", document_id: d.id, eleve_id: eleve.id, niveau, exercices: groupes[i], premiere: i === 0 },
       (m) => surProgres(`${faits} / ${groupes.length} parties — service occupé, ${m}`));
     faits++; surProgres(`${faits} / ${groupes.length} parties`);
     return r;
-  })));
+  });
+  // La première partie part seule : elle met l'original et la charte en cache, les suivantes les relisent à 10 % du prix.
+  const premiere = await lancer(0);
+  const parties = [premiere, ...(await Promise.all(groupes.slice(1).map((_, k) => lancer(k + 1))))];
   const application = new Map();
   parties.flatMap((p) => p.application ?? []).forEach((a) => {
     const x = application.get(a.code);
@@ -631,6 +672,42 @@ async function etapeGeneration(d, demandes, retour) {
       h("button", { class: "btn", onclick: () => etapePropositions(d, retour) }, "Voir les adaptations"),
       h("button", { class: "btn sec", onclick: () => etapeGeneration(d, demandes, retour) }, "Relancer")));
   } else etapePropositions(await chargerDoc(d.id), retour ?? demandes[0]?.eleve.id);
+}
+
+// Mode économique : envoi différé, puis récupération à la prochaine visite
+async function etapeDiffere(d, demandes, retour) {
+  const groupes = groupesExercices(d.structure?.exercices ?? []);
+  const lignes = new Map(demandes.map(({ eleve }) => [eleve.id, h("li", {}, `${eleve.identifiant} — envoi…`)]));
+  afficher(bandeau(3), h("h2", {}, "Mode économique"), h("div", { class: "carte" }, h("ul", {}, [...lignes.values()])));
+  verifier(await sb.from("documents").update({ statut: "en_adaptation" }).eq("id", d.id));
+  let erreurs = 0;
+  for (const { eleve, niveau } of demandes) {
+    const li = lignes.get(eleve.id);
+    try {
+      await appelMoteurRelance({ action: "adapter_differe", document_id: d.id, eleve_id: eleve.id, niveau, groupes });
+      li.replaceChildren(`✓ ${eleve.identifiant} (${NIVEAUX_ADAPT[niveau]}) — en préparation`);
+    } catch (err) { erreurs++; li.replaceChildren(h("span", { style: "color:var(--erreur)" }, `✗ ${eleve.identifiant} — ${err.message}`)); }
+  }
+  $app().append(
+    message(erreurs ? "err" : "ok", erreurs ? "Certains envois ont échoué : relancez-les." : "C’est lancé. Vous pouvez fermer cette page : les adaptations apparaîtront dans ce document, en général en moins d’une heure."),
+    h("div", { class: "ligne" },
+      h("button", { class: "btn", onclick: () => vueDocuments() }, "Retour aux documents"),
+      h("button", { class: "btn sec", onclick: () => etapePropositions(d, retour) }, "Voir le document")));
+}
+
+/** Vérifie les adaptations différées en attente (toutes, ou celles d'un document). */
+async function verifierLots(documentId) {
+  let q = sb.from("lots_ia").select("id, document_id, eleve_id, created_at").eq("statut", "en_cours");
+  if (documentId) q = q.eq("document_id", documentId);
+  const { data: lots } = await q;
+  const enCours = [];
+  for (const l of lots ?? []) {
+    try {
+      const r = await appelMoteur({ action: "verifier_differe", lot_id: l.id });
+      if (r.statut === "en_cours") enCours.push(l);
+    } catch { enCours.push(l); }
+  }
+  return enCours;
 }
 
 // Aperçu fidèle (iframe isolée, même rendu que le PDF)
@@ -679,6 +756,7 @@ function fusionnerCorrige(ancien = [], nouveau = []) {
 // Étape 5 : propositions, aperçu, ajustements
 async function etapePropositions(d, eleveActif) {
   afficher(chargement("Chargement des adaptations…"));
+  const attente = await verifierLots(d.id);
   const liens = verifier(await sb.from("document_eleves").select("niveau_max, eleves(*, profils_eleves(*))").eq("document_id", d.id));
   const eleves = liens.map((l) => ({ ...l.eleves, niveau_doc: l.niveau_max })).filter((e) => e.id).sort((a, b) => a.identifiant.localeCompare(b.identifiant));
   if (!eleves.length) return etapeEleves(d);
@@ -729,7 +807,8 @@ async function etapePropositions(d, eleveActif) {
           h("ul", { class: "doux", style: "margin:.3rem 0" }, (v.resume_modifications ?? []).slice(0, 5).map((r) => h("li", {}, r))),
           carteControle(v))),
         h("div", { class: "ligne", style: "margin-top:.4rem" }, autreNiveau,
-          h("button", { class: "btn sec", onclick: () => etapeGeneration(d, [{ eleve: actif, niveau: autreNiveau.value }], actif.id) }, "Nouvelle proposition"))),
+          h("button", { class: "btn sec", onclick: () => etapeGeneration(d, [{ eleve: actif, niveau: autreNiveau.value }], actif.id) }, "Nouvelle proposition"),
+          h("button", { class: "btn discret", title: "Même résultat, moitié prix, prêt dans l’heure", onclick: () => etapeDiffere(d, [{ eleve: actif, niveau: autreNiveau.value }], actif.id) }, "… en mode économique"))),
       courante ? h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Ajuster la version affichée"),
         h("p", { class: "doux" }, `${dateFr(courante.created_at)} — ${NIVEAUX_ADAPT[courante.niveau]}${courante.auteur === "professeur" ? " — modifiée à la main" : courante.parent_id ? " — ajustée" : ""}`),
         msg, h("label", { class: "ligne", style: "font-weight:normal" }, retenir, "Retenir cette préférence pour mes prochaines adaptations"),
@@ -755,7 +834,12 @@ async function etapePropositions(d, eleveActif) {
               verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", actif.id));
               verifier(await sb.from("versions").update({ choisie: true }).eq("id", v.id));
               etapePropositions(d, actif.id);
-            }) }, "Retenir"))))) : null,
+            }) }, "Retenir"),
+            v.choisie ? null : h("button", { class: "btn discret", title: "Supprimer cette version", onclick: () => essai(async () => {
+              if (!confirm("Supprimer cette version ? Cette suppression est définitive.")) return;
+              verifier(await sb.from("versions").delete().eq("id", v.id));
+              etapePropositions(d, actif.id);
+            }) }, "✕"))))) : null,
       h("button", { class: "btn", onclick: () => etapeExport(d) }, "Passer à l’export →"));
   }
 
@@ -773,10 +857,15 @@ async function etapePropositions(d, eleveActif) {
         h("button", { class: "btn sec", onclick: () => montrer(courante) }, "Annuler")), zone));
   }
 
-  afficher(bandeau(4), h("h2", {}, `Adaptations — ${d.titre}`),
+  const attenteActif = attente.filter((l) => l.eleve_id === actif.id);
+  const ident = new Map(eleves.map((e) => [e.id, e.identifiant]));
+  const bandeauAttente = attente.length ? h("div", { class: "msg info" },
+    `En préparation (mode économique) : ${attente.map((l) => `${ident.get(l.eleve_id) ?? "?"} depuis ${new Date(l.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`).join(", ")}. `,
+    h("button", { class: "btn discret", onclick: () => etapePropositions(d, actif.id) }, "Vérifier maintenant")) : null;
+  afficher(bandeau(4), h("h2", {}, `Adaptations — ${d.titre}`), bandeauAttente,
     h("div", { class: "onglets" }, eleves.map((e) => h("button", { class: e.id === actif.id ? "actif" : "", onclick: () => etapePropositions(d, e.id) }, e.identifiant)),
       h("button", { onclick: () => etapeEleves(d) }, "+ élèves")),
-    versions.length ? h("div", { class: "deux" }, panneau, feuille) : h("div", {}, message("info", "Aucune adaptation pour cet élève."),
+    versions.length ? h("div", { class: "deux" }, panneau, feuille) : attenteActif.length ? message("info", "L’adaptation de cet élève est en préparation (mode économique). Revenez plus tard : elle apparaîtra ici.") : h("div", {}, message("info", "Aucune adaptation pour cet élève."),
       h("button", { class: "btn", onclick: () => etapeGeneration(d, [{ eleve: actif, niveau: actif.niveau_doc ?? "consignes" }], actif.id) }, "Générer maintenant")));
   if (courante) montrer(courante); else if (versions.length) panneauDroit();
 }
