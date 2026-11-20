@@ -6,7 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   FONDS, POLICES, parametres, tiersTemps, echapper, svgFigure, pourImpression,
   cssCharte, hydraterDom, htmlPourStockage, corrigeHtml, pageAutonomeV3, docxDepuisDom,
-} from "./rendu.js?v=2026112004";
+} from "./rendu.js?v=2026112005";
 
 const SUPA_URL = "https://mfykdfytbnajxfnkjhwz.supabase.co";
 const SUPA_CLE = "sb_publishable_B7kioKokXxrUihZ3FBofYQ_T49C21eO";
@@ -643,6 +643,78 @@ async function dessinerFigures(html, d, eleveId, niveau, file = limiteur(3), sur
   return { html: div.innerHTML, alertes };
 }
 
+/** Contrôles automatiques après génération : exercices présents, points conformes à la lecture validée, détail du barème. */
+function controlerPoints(d, html) {
+  const exos = d.structure?.exercices ?? [];
+  const t = document.createElement("template"); t.innerHTML = html;
+  const alertes = [];
+  const fr = (n) => String(Math.round(n * 100) / 100).replace(".", ",");
+  const nombre = (x) => parseFloat(String(x).replace(",", "."));
+  for (const e of exos) {
+    const sec = t.content.querySelector(`section.exo[data-exo="${CSS.escape(String(e.numero))}"]`);
+    if (!sec) { alertes.push(`Exercice ${e.numero} absent de l’adaptation : demandez-le par un ajustement.`); continue; }
+    if (e.points == null) continue;
+    const span = sec.querySelector(":scope > header > span:last-child");
+    const m = span?.textContent.match(/\/\s*(\d+(?:[.,]\d+)?)/);
+    if (span && (!m || nombre(m[1]) !== Number(e.points))) {
+      span.textContent = `…… / ${fr(e.points)}`;
+      alertes.push(`Exercice ${e.numero} : total remis à ${fr(e.points)} point(s), comme dans la lecture validée.`);
+    }
+    const corps = [...sec.childNodes].filter((n) => n.nodeName !== "HEADER").map((n) => n.textContent).join(" ");
+    const details = [...corps.matchAll(/[(–\-:]\s*(\d+(?:[.,]\d+)?)\s*(?:pts?|points?)\s*[):]/gi)].map((x) => nombre(x[1]));
+    const somme = details.reduce((a, b) => a + b, 0);
+    if (details.length >= 2 && Math.abs(somme - Number(e.points)) > 0.01) {
+      alertes.push(`Exercice ${e.numero} : le détail des points des questions fait ${fr(somme)} au lieu de ${fr(e.points)}. Vérifiez le barème sur l’original.`);
+    }
+  }
+  const total = d.structure?.total_points;
+  const note = t.content.querySelector(".entete span:last-child");
+  if (total != null && note) {
+    const m = note.textContent.match(/\/\s*(\d+(?:[.,]\d+)?)/);
+    if (!m || nombre(m[1]) !== Number(total)) { note.textContent = `Note : ……… / ${fr(total)}`; alertes.push(`Total du sujet remis à ${fr(total)} points.`); }
+  }
+  const div = document.createElement("div"); div.append(t.content);
+  return { html: div.innerHTML, alertes };
+}
+
+/** Textes qui sortent d'une figure : réduits puis recentrés pour rester dans le cadre. */
+function corrigerFigures(html) {
+  const hote = document.createElement("div");
+  hote.style.cssText = "position:absolute;left:-10000px;top:0;width:820px;visibility:hidden";
+  hote.innerHTML = html;
+  document.body.append(hote);
+  let n = 0;
+  try {
+    for (const svg of hote.querySelectorAll(".figure-svg svg")) {
+      const vb = svg.viewBox?.baseVal;
+      const cadre = svg.getBoundingClientRect();
+      if (!vb?.width || !cadre.width) continue;
+      const echelle = vb.width / cadre.width;
+      for (const t of svg.querySelectorAll("text")) {
+        let r = t.getBoundingClientRect();
+        if (!r.width) continue;
+        const avant = Math.max(0, cadre.left + 2 - r.left), apres = Math.max(0, r.right - (cadre.right - 2));
+        if (!avant && !apres) continue;
+        const taille = parseFloat(t.getAttribute("font-size") || t.closest("[font-size]")?.getAttribute("font-size") || "4");
+        const facteur = Math.max(0.55, (cadre.width - 6) / r.width, (r.width - avant - apres) / r.width);
+        t.setAttribute("font-size", (taille * Math.min(1, facteur)).toFixed(2));
+        t.removeAttribute("textLength");
+        r = t.getBoundingClientRect();
+        const decalage = r.left < cadre.left + 2 ? cadre.left + 2 - r.left : r.right > cadre.right - 2 ? (cadre.right - 2) - r.right : 0;
+        if (decalage) t.setAttribute("x", (parseFloat(t.getAttribute("x") || "0") + decalage * echelle).toFixed(1));
+        n++;
+      }
+    }
+  } finally { hote.remove(); }
+  return { html: n ? hote.innerHTML : html, corrigees: n };
+}
+
+function controlesAutomatiques(d, html) {
+  const f = corrigerFigures(html);
+  const p = controlerPoints(d, f.html);
+  return { html: p.html, alertes: [...p.alertes, ...(f.corrigees ? [`${f.corrigees} texte(s) de figure réduit(s) pour rester dans le cadre.`] : [])] };
+}
+
 async function genererPourEleve(d, eleve, niveau, file, surProgres) {
   const groupes = groupesExercices(d.structure?.exercices ?? []);
   if (!groupes.length) throw new Error("Aucun exercice dans la lecture validée.");
@@ -663,14 +735,15 @@ async function genererPourEleve(d, eleve, niveau, file, surProgres) {
     application.set(a.code, x ? { ...x, applique: x.applique || a.applique, detail: [x.detail, a.detail].filter(Boolean).join(" ; ") } : a);
   });
   const figures = await dessinerFigures(parties.map((p) => p.html).join("\n"), d, eleve.id, niveau, file, surProgres);
-  const contenu = { format: "html", html: figures.html, corrige: parties.flatMap((p) => p.corrige ?? []) };
+  const controle = controlesAutomatiques(d, figures.html);
+  const contenu = { format: "html", html: controle.html, corrige: parties.flatMap((p) => p.corrige ?? []) };
   const precedentes = verifier(await sb.from("versions").select("id, parent_id").eq("document_id", d.id).eq("eleve_id", eleve.id));
   verifier(await sb.from("versions").update({ choisie: false }).eq("document_id", d.id).eq("eleve_id", eleve.id));
   return verifier(await sb.from("versions").insert({
     document_id: d.id, eleve_id: eleve.id, niveau, contenu,
     numero_proposition: precedentes.filter((v) => !v.parent_id).length + 1,
     resume_modifications: parties.flatMap((p) => p.resume_modifications ?? []),
-    controle: { application: [...application.values()], alertes: [...parties.flatMap((p) => p.alertes ?? []), ...figures.alertes], hors_document: horsDocument(eleve.profils_eleves?.codes) },
+    controle: { application: [...application.values()], alertes: [...controle.alertes, ...parties.flatMap((p) => p.alertes ?? []), ...figures.alertes], hors_document: horsDocument(eleve.profils_eleves?.codes), controle_auto: true },
     auteur: "ia", choisie: true,
   }).select().single());
 }
@@ -790,6 +863,12 @@ async function etapePropositions(d, eleveActif) {
   if (!eleves.length) return etapeEleves(d);
   const actif = eleves.find((e) => e.id === eleveActif) ?? eleves[0];
   const versions = verifier(await sb.from("versions").select("*").eq("document_id", d.id).eq("eleve_id", actif.id).order("created_at")).filter(estV3);
+  for (const v of versions.filter((x) => x.controle?.mode === "differe" && !x.controle?.controle_auto)) {
+    const c = controlesAutomatiques(d, v.contenu.html);
+    v.contenu = { ...v.contenu, html: c.html };
+    v.controle = { ...v.controle, alertes: [...c.alertes, ...(v.controle.alertes ?? [])], controle_auto: true };
+    await sb.from("versions").update({ contenu: v.contenu, controle: v.controle }).eq("id", v.id);
+  }
   const profil = actif.profils_eleves ?? {};
   const p = parametres(profil.codes ?? [], profil.preferences ?? {}, E.profilsNiveau[d.classes?.niveau]);
   const racines = versions.filter((v) => !v.parent_id);
@@ -849,7 +928,7 @@ async function etapePropositions(d, eleveActif) {
             if (!(r.sections ?? []).length) throw new Error((r.alertes ?? []).join(" ") || "Aucune modification proposée.");
             zone.replaceChildren(chargement("Dessin des figures modifiées…"));
             const figAlertes = [];
-            for (const sec of r.sections) { const f = await dessinerFigures(sec.html, d, actif.id, courante.niveau); sec.html = f.html; figAlertes.push(...f.alertes); }
+            for (const sec of r.sections) { const f = await dessinerFigures(sec.html, d, actif.id, courante.niveau); sec.html = corrigerFigures(f.html).html; figAlertes.push(...f.alertes); }
             r.alertes = [...(r.alertes ?? []), ...figAlertes];
             await sb.from("ajustements").insert({ version_id: courante.id, message: msg.value.trim() }).then(() => {}, () => {});
             await enregistrer(
