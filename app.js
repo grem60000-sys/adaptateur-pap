@@ -919,8 +919,6 @@ async function vueEtablissement() {
   const c = conso.data?.[0] ?? { nb_operations: 0, cout_eur: 0, plafond_eur: etab.data?.plafond_mensuel_eur };
   const champCle = h("input", { type: "password", autocomplete: "off", placeholder: "sk-ant-…" });
   const plafond = h("input", { type: "number", min: 0, step: 1, value: etab.data?.plafond_mensuel_eur ?? 30 });
-  const modele = h("select", {}, [["claude-opus-5-5", "Claude Opus 5.5 (recommandé : meilleure qualité)"], ["claude-sonnet-5-5", "Claude Sonnet 5.5 (moins cher, moins fidèle)"], ["claude-haiku-5-5", "Claude Haiku 5.5 (économique)"]]
-    .map(([v, t]) => h("option", { value: v, selected: (etab.data?.modele_ia ?? "claude-opus-5-5") === v }, t)));
   const email = h("input", { type: "email", placeholder: "collegue@exemple.fr" });
   const role = h("select", {}, h("option", { value: "professeur" }, "Professeur"), h("option", { value: "referent" }, "Référent"));
   const z1 = h("div"), z2 = h("div"), z3 = h("div");
@@ -938,9 +936,10 @@ async function vueEtablissement() {
         h("p", { style: "font-size:1.6rem;margin:.2rem 0" }, `${Number(c.cout_eur).toFixed(2)} €`),
         h("p", { class: "doux" }, `${c.nb_operations} opération(s) · plafond ${Number(c.plafond_eur ?? 0).toFixed(0)} € · estimation indicative`),
         h("label", {}, "Plafond mensuel (€)"), plafond,
-        h("label", {}, "Modèle d’IA"), modele,
+        h("p", { style: "margin:.7rem 0 0" }, "Niveau de qualité : ", h("b", {}, QUALITES[etab.data?.niveau_qualite]?.nom ?? "—"),
+          h("span", { class: "doux" }, " — fixé par JR Enseignement")),
         h("button", { class: "btn", style: "margin-top:.6rem", onclick: () => essai(async () => {
-          verifier(await sb.from("etablissements").update({ plafond_mensuel_eur: +plafond.value, modele_ia: modele.value }).eq("id", E.etab.id));
+          verifier(await sb.from("etablissements").update({ plafond_mensuel_eur: +plafond.value }).eq("id", E.etab.id));
           z2.replaceChildren(message("ok", "Réglages enregistrés."));
         }, z2) }, "Enregistrer"), z2)),
     h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Collègues"),
@@ -959,6 +958,10 @@ async function vueEtablissement() {
 // ---------------------------------------------------------------------
 //  Administration (administrateur de la plateforme)
 // ---------------------------------------------------------------------
+const QUALITES = {
+  maximale: { nom: "Qualité maximale", detail: "Opus, réflexion approfondie" },
+  standard: { nom: "Qualité standard", detail: "Opus, réflexion courte — environ 40 % moins cher" },
+};
 async function vueAdmin() {
   const etabs = verifier(await sb.from("etablissements").select("*").order("created_at"));
   const nom = h("input", { placeholder: "Nom de l’établissement" });
@@ -967,8 +970,16 @@ async function vueAdmin() {
   afficher(h("h2", {}, "Administration de la plateforme"),
     message("info", "Chaque établissement enregistre sa propre clé API. Votre clé ne sert qu’à votre établissement."),
     h("div", { class: "carte" }, h("table", { class: "liste" },
-      h("tr", {}, h("th", {}, "Établissement"), h("th", {}, "Créé le"), h("th", {}, "Actif")),
-      etabs.map((e) => h("tr", {}, h("td", {}, e.nom), h("td", {}, dateFr(e.created_at)), h("td", {}, e.actif ? "Oui" : "Non"))))),
+      h("tr", {}, h("th", {}, "Établissement"), h("th", {}, "Créé le"), h("th", {}, "Niveau de qualité"), h("th", {}, "Actif")),
+      etabs.map((e) => {
+        const z = h("span", { class: "doux" });
+        const sel = h("select", { style: "width:auto", onchange: (ev) => essai(async () => {
+          verifier(await sb.from("etablissements").update({ niveau_qualite: ev.target.value }).eq("id", e.id));
+          z.textContent = " ✓ enregistré";
+        }, z) }, Object.entries(QUALITES).map(([v, q]) => h("option", { value: v, selected: e.niveau_qualite === v }, `${q.nom} (${q.detail})`)));
+        return h("tr", {}, h("td", {}, e.nom), h("td", {}, dateFr(e.created_at)), h("td", {}, sel, z), h("td", {}, e.actif ? "Oui" : "Non"));
+      }))),
+    h("p", { class: "doux" }, "Le niveau s’applique à toutes les adaptations des professeurs de l’établissement. Les référents le voient mais ne peuvent pas le modifier."),
     h("div", { class: "carte" }, h("h3", { style: "margin-top:0" }, "Ouvrir un établissement"),
       h("div", { class: "grille" }, h("div", {}, h("label", {}, "Nom"), nom), h("div", {}, h("label", {}, "Référent (e-mail)"), ref)),
       h("button", { class: "btn", style: "margin-top:.8rem", onclick: () => essai(async () => {
